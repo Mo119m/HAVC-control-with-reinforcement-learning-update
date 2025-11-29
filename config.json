@@ -1,0 +1,85 @@
+{
+  "env": "development",
+  
+  "llm": {
+    "model_name": "Qwen/Qwen2.5-7B-Instruct",
+    "max_new_tokens": 256,
+    "temperature": 0.7,
+    "top_p": 0.7,
+    "top_k": 50,
+    "repetition_penalty": 1.0,
+    "hf_token": null
+  },
+  
+  "hvac": {
+    "building": "OfficeSmall",
+    "climate": "Hot_Dry",
+    "location": "Tucson",
+    "target_temp": 22.0,
+    "data_root": "./BEAR/Data/"
+  },
+  
+  "fewshot": {
+    "json_path": "fs_out/few_shot_examples_structured.json",
+    "k": 3,
+    "alpha": 0.6,
+    "preselect": 2000,
+    "n_clusters": 12,
+    "n_per_cluster": 20
+  },
+  
+  "prompt": {
+    "history_keep": 6,
+    "history_lines": 3,
+    "enable_cot": true,
+    "system_message": "You are an HVAC control expert. Analyze the building state and provide optimal temperature setpoints."
+  },
+  
+  "training": {
+    "total_steps": 500000,
+    "learning_rate": 3e-4,
+    "gamma": 0.99,
+    "gae_lambda": 0.95,
+    "policy_name": "MlpPolicy",
+    "n_envs": 1
+  },
+  
+  "finetuning": {
+    "epochs": 3,
+    "lr": 1e-4,
+    "batch_size": 2,
+    "grad_accum": 8,
+    "lora_r": 8,
+    "lora_alpha": 16,
+    "lora_dropout": 0.05,
+    "max_seq_len": 1500,
+    "value_coef": 0.5,
+    "entropy_coef": 0.01,
+    "ppo_clip_eps": 0.2
+  },
+  
+  "distillation": {
+    "min_reward_percentile": 0.5,
+    "reward_q_low": 0.05,
+    "reward_q_high": 0.99,
+    "check_action_validity": true,
+    "check_parse_success": true
+  },
+  
+  "paths": {
+    "base_dir": "./pipeline_output",
+    "ppo_dir": "01_ppo_training",
+    "fewshot_dir": "02_few_shot_samples",
+    "llm_rollout_dir": "03_llm_rollout",
+    "finetune_dir": "04_finetuning",
+    "eval_dir": "05_evaluation",
+    "checkpoint_dir": "checkpoints",
+    "log_dir": "logs"
+  },
+  
+  "rollout": {
+    "max_steps": 200,
+    "save_checkpoints": true,
+    "checkpoint_interval": 50
+  }
+}
