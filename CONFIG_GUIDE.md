@@ -570,9 +570,4 @@ else:
 3. 使用环境变量进行快速实验
 4. 保存成功的配置为新文件
 
----
 
-**相关文件：**
-- `config.json` - 默认配置文件
-- `core_modules/config_manager.py` - 配置管理模块
-- `main_pipeline.py` - 使用配置的主程序
