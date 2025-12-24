@@ -1,0 +1,28 @@
+# HVAC Control with Reinforcement Learning
+# Core dependencies for Colab
+
+# Deep Learning
+torch>=2.0.0
+transformers>=4.35.0
+accelerate>=0.24.0
+peft>=0.6.0
+
+# Reinforcement Learning
+stable-baselines3>=2.0.0
+sb3-contrib>=2.0.0
+gymnasium>=0.29.0
+
+# Data Processing
+numpy>=1.24.0
+pandas>=2.0.0
+scikit-learn>=1.3.0
+scipy>=1.11.0
+
+# Visualization
+matplotlib>=3.7.0
+
+# Weather/Solar calculations
+pvlib>=0.10.0
+
+# Utilities
+tqdm>=4.65.0

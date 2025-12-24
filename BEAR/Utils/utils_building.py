@@ -489,32 +489,33 @@ def ParameterGenerator(
     else:
         weatherfile = [weather_dic[Weather],groundtemp]
 
-        # ——— 自动定位 Data 文件夹 并拼出正确路径 ———
-    import os  # 如果顶头没 import os，就加在文件最上面
-
-    # 先找到这个文件（utils_building.py）所在目录的上两级下的 Data
-    data_dir = os.path.abspath(
-        os.path.join(
-            os.path.dirname(__file__),  # Utils
-            '..',                        # BEAR
-            'Data'                       # BEAR/Data
-        )
-    )
-         # —— 拼出正确的 Data 目录下绝对路径 —— 
-    data_dir = os.path.abspath(
-         os.path.join(os.path.dirname(__file__), '..', 'Data')
-     )
-    if root and root != 'userdefined':
+    # ——— 自动定位 Data 文件夹 并拼出正确路径 ———
+    # Determine data directory with multiple fallback locations
+    if root and root != 'userdefined' and root != '../Data':
         data_dir = root
-    filename       = os.path.join(data_dir,       filename)
-    weatherfile[0] = os.path.join(data_dir, weatherfile[0])
-     # —— 完成 —— 
+    else:
+        # Try multiple possible data locations
+        possible_data_dirs = [
+            os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'Data')),  # BEAR/Data
+            os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'Data')),  # project_root/Data
+            os.path.abspath(os.path.join(os.getcwd(), 'Data')),  # CWD/Data
+            os.path.abspath(os.path.join(os.getcwd(), 'BEAR', 'Data')),  # CWD/BEAR/Data
+        ]
 
+        data_dir = None
+        for d in possible_data_dirs:
+            if os.path.isdir(d):
+                data_dir = d
+                break
 
+        if data_dir is None:
+            data_dir = possible_data_dirs[0]  # Default to BEAR/Data
 
-    # 最后在 data_dir 里拼文件名
-    filename       = os.path.join(data_dir,       filename)
-    weatherfile[0] = os.path.join(data_dir, weatherfile[0])
+    # Build full file paths (only if filename is not already absolute)
+    if not os.path.isabs(filename):
+        filename = os.path.join(data_dir, filename)
+    if not os.path.isabs(weatherfile[0]):
+        weatherfile[0] = os.path.join(data_dir, weatherfile[0])
     # ——— 替换结束 ———
 
 
