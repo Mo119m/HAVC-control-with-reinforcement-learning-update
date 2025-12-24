@@ -14,7 +14,7 @@ Key Features:
 import os
 import json
 import logging
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 from stable_baselines3.common.callbacks import BaseCallback

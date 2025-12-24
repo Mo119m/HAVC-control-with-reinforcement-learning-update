@@ -38,6 +38,11 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+def _get_default_data_root():
+    """Get default data root path relative to this script"""
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "BEAR", "Data"))
+
+
 @dataclass
 class CollectionConfig:
     """Configuration for PPO training and data collection"""
@@ -45,13 +50,13 @@ class CollectionConfig:
     building: str = "OfficeSmall"
     weather: str = "Hot_Dry"
     location: str = "Tucson"
-    data_root: str = "./BEAR/Data/"
-    
+    data_root: str = ""  # Will be set in __post_init__
+
     # Training
     total_steps: int = 500000
     n_envs: int = 1
     seed: int = 42
-    
+
     # PPO hyperparameters
     learning_rate: float = 3e-4
     n_steps: int = 2048
@@ -59,14 +64,18 @@ class CollectionConfig:
     n_epochs: int = 10
     gamma: float = 0.99
     gae_lambda: float = 0.95
-    
+
     # Saving
     save_dir: str = "./runs_officesmall_hotdry"
     checkpoint_freq: int = 50000
-    
+
     # Resume
     resume_from: Optional[str] = None
-    
+
+    def __post_init__(self):
+        if not self.data_root:
+            self.data_root = _get_default_data_root()
+
     def validate(self) -> None:
         """Validate configuration"""
         if self.total_steps <= 0:
@@ -262,7 +271,8 @@ def main():
         logger.info(f"Training for {config.total_steps} steps")
         model.learn(
             total_timesteps=config.total_steps,
-            callback=callback
+            callback=callback,
+            progress_bar=True  # Show progress bar
         )
         
         # Save final model
