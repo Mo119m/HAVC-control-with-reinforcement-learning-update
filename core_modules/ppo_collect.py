@@ -271,7 +271,8 @@ def main():
         logger.info(f"Training for {config.total_steps} steps")
         model.learn(
             total_timesteps=config.total_steps,
-            callback=callback
+            callback=callback,
+            progress_bar=True  # Show progress bar
         )
         
         # Save final model
