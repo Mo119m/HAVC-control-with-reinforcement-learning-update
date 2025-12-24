@@ -247,31 +247,56 @@ class Pipeline:
     def _run_llm_rollout(self) -> bool:
         """Stage 3: LLM Rollout"""
         logger.info("Starting LLM rollout...")
-        
+
         if not self.paths["fewshot_json"].exists():
             logger.error("Few-shot examples not found, run 'select' stage first")
             return False
-        
-        # This would call rollout_fewshot_version.py
-        logger.warning("LLM rollout script not yet optimized")
-        logger.info("Skipping LLM rollout for now...")
-        
-        # TODO: Implement when rollout_fewshot_version.py is optimized
-        # For now, create a dummy file
-        dummy_trajectory = [
-            {
-                "step": 0,
-                "prompt": "dummy",
-                "action": [0.0] * 3,
-                "reward": -10.0,
-                "done": False
-            }
-        ]
-        
-        with open(self.paths["llm_rollout_trajectory"], "w") as f:
-            json.dump(dummy_trajectory, f, indent=2)
-        
-        return True
+
+        # Set environment variables for rollout script
+        env = {
+            **os.environ,
+            "BUILDING": self.config.building,
+            "CLIMATE": self.config.weather,
+            "LOCATION": self.config.location,
+            "FEWSHOT_JSON": str(self.paths["fewshot_json"]),
+            "SAVE_PATH": str(self.paths["llm_rollout_trajectory"]),
+            "MAX_STEPS": "200",
+            "K_FEWSHOT": str(self.config.k_fewshot),
+            "FEWSHOT_ALPHA": str(self.config.fewshot_alpha),
+            "MODEL_NAME": self.config.model_name,
+        }
+
+        logger.info(f"Running LLM rollout with model: {self.config.model_name}")
+        logger.info(f"Few-shot examples: {self.paths['fewshot_json']}")
+        logger.info(f"Output: {self.paths['llm_rollout_trajectory']}")
+
+        try:
+            result = subprocess.run(
+                ["python", "rollout_fewshot_version.py"],
+                env=env,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=7200  # 2 hours timeout
+            )
+
+            logger.info("LLM rollout completed")
+            logger.debug(result.stdout)
+
+            # Verify output
+            if not self.paths["llm_rollout_trajectory"].exists():
+                logger.error("LLM rollout trajectory file not found")
+                return False
+
+            return True
+
+        except subprocess.CalledProcessError as e:
+            logger.error(f"LLM rollout failed: {e}")
+            logger.error(e.stderr)
+            return False
+        except subprocess.TimeoutExpired:
+            logger.error("LLM rollout timed out")
+            return False
     
     def _run_finetuning(self) -> bool:
         """Stage 4: Fine-tuning"""
