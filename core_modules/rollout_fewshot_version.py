@@ -244,8 +244,7 @@ def run_rollout(config: RolloutConfig) -> List[Dict]:
                 climate=config.climate,
                 target=config.target,
                 round_idx=step + 1,
-                history=list(history),
-                history_lines=config.hist_lines_in_prompt
+                history=list(history)
             )
         except Exception as e:
             logger.error(f"Failed to build prompt: {e}")
