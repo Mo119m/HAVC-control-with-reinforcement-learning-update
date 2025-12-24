@@ -3,7 +3,7 @@ The module implements the BuildingEnv class.
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Dict, Tuple
 import functools
 import gymnasium as gym
 from gymnasium.envs.registration import EnvSpec
