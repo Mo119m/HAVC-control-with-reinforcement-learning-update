@@ -187,7 +187,8 @@ def run_rollout(config: RolloutConfig) -> List[Dict]:
     from llm_agent_colab import call_llm, parse_actions_with_validation
     from few_shot_auto import (
         load_examples, select_examples,
-        format_few_shot_block, inject_few_shot
+        format_few_shot_block, inject_few_shot,
+        SelectionConfig
     )
     
     # Create output directory
@@ -254,11 +255,14 @@ def run_rollout(config: RolloutConfig) -> List[Dict]:
         few_block = None
         if ex_dataset:
             try:
+                selection_cfg = SelectionConfig(
+                    k=config.k_fewshot,
+                    alpha=config.fewshot_alpha
+                )
                 examples = select_examples(
                     ex_dataset,
                     current_obs=obs,
-                    k=config.k_fewshot,
-                    alpha=config.fewshot_alpha,
+                    config=selection_cfg,
                     building=config.building,
                     climate=config.climate,
                     location=config.location
