@@ -155,59 +155,67 @@ def load_and_filter_trajectory(
 ) -> List[Tuple[List[float], List[float], List[float], float]]:
     """
     Load trajectory and filter valid samples.
-    
+
     Args:
         traj_path: Path to trajectory JSON
         config: Selection configuration
-        
+
     Returns:
         List of tuples (obs, temps, action, reward)
     """
     if not traj_path.exists():
         raise FileNotFoundError(f"Trajectory not found: {traj_path}")
-    
+
     logger.info(f"Loading trajectory from {traj_path}")
-    
+
     with open(traj_path, "r", encoding="utf-8") as f:
         trajectory = json.load(f)
-    
+
     if not trajectory:
         raise ValueError("Empty trajectory")
-    
+
     logger.info(f"Loaded {len(trajectory)} transitions")
-    
-    # Extract valid candidates
-    candidates = []
-    
+
+    # First pass: Extract all valid candidates (without reward filtering)
+    all_candidates = []
+
     for i, step in enumerate(trajectory):
         # Extract fields
         obs = step.get("obs") or step.get("obs_before")
         action = step.get("action")
         reward = step.get("reward", 0.0)
-        
+
         if obs is None or action is None:
             continue
-        
+
         # Parse observation
         n_zones, temps = obs_split(obs)
-        
+
         # Validate action
         is_valid, action_normalized = validate_action(action, n_zones)
-        
+
         if not is_valid:
             continue
-        
-        # Apply minimum reward filter
-        if reward < config.min_reward_percentile:
-            continue
-        
-        candidates.append((obs, temps, action_normalized, float(reward)))
-    
-    logger.info(f"Found {len(candidates)} valid candidates")
-    
+
+        all_candidates.append((obs, temps, action_normalized, float(reward)))
+
+    logger.info(f"Found {len(all_candidates)} valid candidates before reward filtering")
+
+    if not all_candidates:
+        raise ValueError("No valid candidates found")
+
+    # Second pass: Filter by reward percentile
+    rewards = [c[3] for c in all_candidates]
+    reward_threshold = np.percentile(rewards, config.min_reward_percentile * 100)
+    logger.info(f"Reward threshold (top {(1-config.min_reward_percentile)*100:.0f}%): {reward_threshold:.4f}")
+
+    candidates = [c for c in all_candidates if c[3] >= reward_threshold]
+
+    logger.info(f"Found {len(candidates)} candidates after reward filtering")
+
     if not candidates:
         raise ValueError("No valid candidates after filtering")
-    
+
     return candidates
 
 

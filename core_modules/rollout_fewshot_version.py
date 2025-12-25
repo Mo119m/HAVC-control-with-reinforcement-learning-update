@@ -37,6 +37,11 @@ logger = logging.getLogger(__name__)
 # Configuration
 # ============================================================================
 
+def _get_default_data_root():
+    """Get default data root path relative to this script"""
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "BEAR", "Data"))
+
+
 @dataclass
 class RolloutConfig:
     """Configuration for LLM rollout"""
@@ -45,35 +50,39 @@ class RolloutConfig:
     climate: str = "Hot_Dry"
     location: str = "Tucson"
     target: float = 22.0
-    data_root: str = "./BEAR/Data/"
-    
+    data_root: str = ""  # Will be set in __post_init__
+
     # Rollout
     max_steps: int = 200
     hist_keep: int = 6
     hist_lines_in_prompt: int = 3
-    
+
     # LLM
     model_name: str = "Qwen/Qwen2.5-7B-Instruct"
     max_new_tokens: int = 256
     temperature: float = 0.3
-    
+
     # Few-shot
     fewshot_json: Optional[str] = None
     k_fewshot: int = 3
     fewshot_alpha: float = 0.6
-    
+
     # Output
     save_path: str = "./outputs/llm_rollout.json"
     save_interval: int = 50
-    
+
     def __post_init__(self):
         """Load from environment variables"""
+        # Set default data_root if not provided
+        if not self.data_root:
+            self.data_root = _get_default_data_root()
+
         self.building = os.getenv("BUILDING", self.building)
         self.climate = os.getenv("CLIMATE", self.climate)
         self.location = os.getenv("LOCATION", self.location)
         self.model_name = os.getenv("MODEL_NAME", self.model_name)
         self.save_path = os.getenv("SAVE_PATH", self.save_path)
-        
+
         if os.getenv("MAX_STEPS"):
             self.max_steps = int(os.getenv("MAX_STEPS"))
         if os.getenv("FEWSHOT_JSON"):
@@ -235,8 +244,7 @@ def run_rollout(config: RolloutConfig) -> List[Dict]:
                 climate=config.climate,
                 target=config.target,
                 round_idx=step + 1,
-                history=list(history),
-                history_lines=config.hist_lines_in_prompt
+                history=list(history)
             )
         except Exception as e:
             logger.error(f"Failed to build prompt: {e}")
