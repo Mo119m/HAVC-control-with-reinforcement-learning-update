@@ -109,7 +109,7 @@ class PPOModel(nn.Module):
     def __init__(self, lm: nn.Module, hidden_size: int):
         super().__init__()
         self.lm = lm
-        self.value_head = nn.Linear(hidden_size, 1)
+        self.value_head = nn.Linear(hidden_size, 1).to(torch.bfloat16)
     
     def forward(
         self,
