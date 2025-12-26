@@ -20,6 +20,7 @@ import time
 import logging
 from typing import List, Dict, Tuple, Optional
 from dataclasses import dataclass
+from pathlib import Path
 
 import torch
 import torch.nn as nn
@@ -27,6 +28,8 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from torch.optim import AdamW
 from transformers import AutoTokenizer, AutoModelForCausalLM
+import numpy as np
+import matplotlib.pyplot as plt
 
 try:
     from peft import LoraConfig, get_peft_model
@@ -97,6 +100,77 @@ class FineTuneConfig:
             self.epochs = int(os.getenv("EPOCHS"))
         if os.getenv("LR"):
             self.lr = float(os.getenv("LR"))
+
+
+def plot_finetune_results(history: Dict[str, List], save_dir: str):
+    """
+    绘制微调训练结果图表
+
+    Args:
+        history: 包含训练历史的字典 {'policy_loss': [...], 'value_loss': [...], ...}
+        save_dir: 保存目录
+    """
+    try:
+        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+        fig.suptitle('LoRA Fine-tuning Results', fontsize=14, fontweight='bold')
+
+        # 1. Policy Loss
+        ax1 = axes[0, 0]
+        if 'policy_loss' in history and history['policy_loss']:
+            ax1.plot(history['policy_loss'], color='blue', linewidth=1.5)
+            ax1.set_xlabel('Step')
+            ax1.set_ylabel('Policy Loss')
+            ax1.set_title('Policy Loss')
+            ax1.grid(True, alpha=0.3)
+
+        # 2. Value Loss
+        ax2 = axes[0, 1]
+        if 'value_loss' in history and history['value_loss']:
+            ax2.plot(history['value_loss'], color='orange', linewidth=1.5)
+            ax2.set_xlabel('Step')
+            ax2.set_ylabel('Value Loss')
+            ax2.set_title('Value Loss')
+            ax2.grid(True, alpha=0.3)
+
+        # 3. Total Loss
+        ax3 = axes[1, 0]
+        if 'total_loss' in history and history['total_loss']:
+            ax3.plot(history['total_loss'], color='red', linewidth=1.5)
+            ax3.set_xlabel('Step')
+            ax3.set_ylabel('Total Loss')
+            ax3.set_title('Total Loss')
+            ax3.grid(True, alpha=0.3)
+
+        # 4. KL Divergence / Entropy
+        ax4 = axes[1, 1]
+        if 'entropy' in history and history['entropy']:
+            ax4.plot(history['entropy'], color='green', linewidth=1.5, label='Entropy')
+        if 'kl' in history and history['kl']:
+            ax4_twin = ax4.twinx()
+            ax4_twin.plot(history['kl'], color='purple', linewidth=1.5, label='KL')
+            ax4_twin.set_ylabel('KL Divergence', color='purple')
+        ax4.set_xlabel('Step')
+        ax4.set_ylabel('Entropy', color='green')
+        ax4.set_title('Entropy & KL Divergence')
+        ax4.grid(True, alpha=0.3)
+
+        plt.tight_layout()
+
+        # 保存
+        plot_path = Path(save_dir) / "finetune_training_curves.png"
+        plt.savefig(plot_path, dpi=150, bbox_inches='tight')
+        plt.close()
+
+        logger.info(f"📊 Fine-tuning plots saved to: {plot_path}")
+
+        # 保存历史数据为 JSON
+        history_path = Path(save_dir) / "training_history.json"
+        with open(history_path, 'w') as f:
+            json.dump({k: [float(v) for v in vals] for k, vals in history.items()}, f)
+        logger.info(f"📊 Training history saved to: {history_path}")
+
+    except Exception as e:
+        logger.warning(f"Failed to plot fine-tuning results: {e}")
 
 
 # PPO Model
@@ -563,9 +637,16 @@ def main():
         ordered_indices.extend(idxs.tolist())
     
     idx_to_pos = {idx: pos for pos, idx in enumerate(ordered_indices)}
-    
+
     # Training Loop
-    
+    training_history = {
+        'policy_loss': [],
+        'value_loss': [],
+        'total_loss': [],
+        'entropy': [],
+        'kl': []
+    }
+
     for epoch in range(config.epochs):
         t0 = time.time()
         logger.info(f"\n{'='*60}")
@@ -698,7 +779,13 @@ def main():
         logger.info(f"  Policy Loss: {total_pl/n_batches:.4f}")
         logger.info(f"  Value Loss: {total_vl/n_batches:.4f}")
         logger.info(f"  Entropy: {total_el/n_batches:.4f}")
-        
+
+        # 记录训练历史
+        training_history['total_loss'].append(total_loss/n_batches)
+        training_history['policy_loss'].append(total_pl/n_batches)
+        training_history['value_loss'].append(total_vl/n_batches)
+        training_history['entropy'].append(total_el/n_batches)
+
         # Save checkpoint
         if (epoch + 1) % 2 == 0 or epoch == config.epochs - 1:
             checkpoint_dir = os.path.join(config.save_dir, f"checkpoint_epoch_{epoch+1}")
@@ -725,9 +812,12 @@ def main():
         policy_model.state_dict(),
         os.path.join(config.save_dir, "policy_model.pt")
     )
-    
+
     logger.info(f"Saved final model to {config.save_dir}")
-    
+
+    # 绘制训练曲线
+    plot_finetune_results(training_history, config.save_dir)
+
     # Validation
     logger.info("\nRunning validation...")
     policy_model.eval()

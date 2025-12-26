@@ -15,10 +15,12 @@ import os
 import json
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 from dataclasses import dataclass
 
 import torch
+import numpy as np
+import matplotlib.pyplot as plt
 from stable_baselines3 import PPO
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.callbacks import CheckpointCallback, CallbackList
@@ -41,6 +43,101 @@ logger = logging.getLogger(__name__)
 def _get_default_data_root():
     """Get default data root path relative to this script"""
     return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "BEAR", "Data"))
+
+
+def plot_training_results(trajectory_path: str, save_dir: str):
+    """
+    绘制 PPO 训练结果图表
+
+    生成的图表:
+    1. Episode Reward 曲线
+    2. Reward 分布直方图
+    3. 滑动平均 Reward
+    """
+    try:
+        with open(trajectory_path, 'r') as f:
+            data = json.load(f)
+
+        if not data:
+            logger.warning("No trajectory data to plot")
+            return
+
+        rewards = [d.get('reward', 0) for d in data]
+        steps = list(range(len(rewards)))
+
+        # 创建图表
+        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+        fig.suptitle('PPO Training Results', fontsize=14, fontweight='bold')
+
+        # 1. Reward 曲线
+        ax1 = axes[0, 0]
+        ax1.plot(steps, rewards, alpha=0.3, color='blue', linewidth=0.5)
+        # 滑动平均
+        window = min(100, len(rewards) // 10) if len(rewards) > 10 else 1
+        if window > 1:
+            smoothed = np.convolve(rewards, np.ones(window)/window, mode='valid')
+            ax1.plot(range(window-1, len(rewards)), smoothed, color='red', linewidth=2, label=f'MA-{window}')
+            ax1.legend()
+        ax1.set_xlabel('Step')
+        ax1.set_ylabel('Reward')
+        ax1.set_title('Step Rewards')
+        ax1.grid(True, alpha=0.3)
+
+        # 2. Reward 分布
+        ax2 = axes[0, 1]
+        ax2.hist(rewards, bins=50, color='steelblue', edgecolor='white', alpha=0.7)
+        ax2.axvline(np.mean(rewards), color='red', linestyle='--', label=f'Mean: {np.mean(rewards):.2f}')
+        ax2.axvline(np.median(rewards), color='green', linestyle='--', label=f'Median: {np.median(rewards):.2f}')
+        ax2.set_xlabel('Reward')
+        ax2.set_ylabel('Count')
+        ax2.set_title('Reward Distribution')
+        ax2.legend()
+        ax2.grid(True, alpha=0.3)
+
+        # 3. 累积 Reward
+        ax3 = axes[1, 0]
+        cumsum = np.cumsum(rewards)
+        ax3.plot(steps, cumsum, color='green', linewidth=1.5)
+        ax3.set_xlabel('Step')
+        ax3.set_ylabel('Cumulative Reward')
+        ax3.set_title('Cumulative Reward')
+        ax3.grid(True, alpha=0.3)
+
+        # 4. 统计信息
+        ax4 = axes[1, 1]
+        ax4.axis('off')
+        stats_text = f"""
+        Training Statistics
+        ─────────────────────
+        Total Steps: {len(rewards):,}
+
+        Reward Stats:
+          Mean:   {np.mean(rewards):.4f}
+          Std:    {np.std(rewards):.4f}
+          Min:    {np.min(rewards):.4f}
+          Max:    {np.max(rewards):.4f}
+          Median: {np.median(rewards):.4f}
+
+        Percentiles:
+          25th:   {np.percentile(rewards, 25):.4f}
+          75th:   {np.percentile(rewards, 75):.4f}
+          90th:   {np.percentile(rewards, 90):.4f}
+        """
+        ax4.text(0.1, 0.5, stats_text, transform=ax4.transAxes, fontsize=12,
+                verticalalignment='center', fontfamily='monospace',
+                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+        plt.tight_layout()
+
+        # 保存图表
+        plot_path = Path(save_dir) / "ppo_training_results.png"
+        plt.savefig(plot_path, dpi=150, bbox_inches='tight')
+        plt.close()
+
+        logger.info(f"📊 Training plots saved to: {plot_path}")
+
+    except Exception as e:
+        logger.warning(f"Failed to plot training results: {e}")
 
 
 @dataclass
@@ -279,7 +376,12 @@ def main():
         model_path = save_dir / "ppo_final.zip"
         model.save(str(model_path))
         logger.info(f"Saved final model to {model_path}")
-        
+
+        # 绘制训练结果图表
+        trajectory_path = save_dir / "ppo_trajectory.json"
+        if trajectory_path.exists():
+            plot_training_results(str(trajectory_path), str(save_dir))
+
         logger.info("Training complete!")
         
     except KeyboardInterrupt:
