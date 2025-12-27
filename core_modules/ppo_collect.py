@@ -45,14 +45,72 @@ def _get_default_data_root():
     return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "BEAR", "Data"))
 
 
-def plot_training_results(trajectory_path: str, save_dir: str):
+class MetricsCallback(CheckpointCallback):
+    """
+    Callback to collect PPO training metrics for plotting.
+    收集 PPO 训练指标用于绘图。
+    """
+    def __init__(self, save_freq, save_path, name_prefix="rl_model", verbose=0):
+        super().__init__(save_freq, save_path, name_prefix, verbose)
+        self.metrics = {
+            'timesteps': [],
+            'ep_rew_mean': [],
+            'ep_len_mean': [],
+            'explained_variance': [],
+            'approx_kl': [],
+            'clip_fraction': [],
+            'entropy_loss': [],
+            'policy_loss': [],
+            'value_loss': [],
+            'std': [],
+        }
+
+    def _on_rollout_end(self) -> bool:
+        """Called at the end of a rollout."""
+        # Get metrics from logger
+        if len(self.model.ep_info_buffer) > 0:
+            self.metrics['timesteps'].append(self.num_timesteps)
+
+            # Episode metrics
+            ep_rew_mean = np.mean([ep_info['r'] for ep_info in self.model.ep_info_buffer]) if self.model.ep_info_buffer else 0
+            ep_len_mean = np.mean([ep_info['l'] for ep_info in self.model.ep_info_buffer]) if self.model.ep_info_buffer else 0
+
+            self.metrics['ep_rew_mean'].append(ep_rew_mean)
+            self.metrics['ep_len_mean'].append(ep_len_mean)
+
+        return True
+
+    def _on_training_end(self) -> None:
+        """Called at the end of training."""
+        # Try to get final training stats from the model's logger
+        try:
+            if hasattr(self.model, 'logger') and self.model.logger is not None:
+                # Get the last logged values
+                pass
+        except:
+            pass
+
+    def update_training_metrics(self, logs: dict):
+        """Update metrics from training logs."""
+        for key in ['explained_variance', 'approx_kl', 'clip_fraction', 'entropy_loss',
+                    'policy_loss', 'value_loss', 'std']:
+            if key in logs:
+                self.metrics[key].append(logs[key])
+
+
+def plot_training_results(trajectory_path: str, save_dir: str, metrics: dict = None):
     """
     绘制 PPO 训练结果图表
 
     生成的图表:
-    1. Episode Reward 曲线
-    2. Reward 分布直方图
-    3. 滑动平均 Reward
+    1. Episode Reward Mean (ep_rew_mean)
+    2. Episode Length Mean (ep_len_mean)
+    3. Explained Variance
+    4. Approx KL & Clip Fraction
+    5. Entropy & Std
+    6. Policy Loss & Value Loss
+    7. Step Rewards
+    8. Reward Distribution
     """
     try:
         with open(trajectory_path, 'r') as f:
@@ -65,65 +123,148 @@ def plot_training_results(trajectory_path: str, save_dir: str):
         rewards = [d.get('reward', 0) for d in data]
         steps = list(range(len(rewards)))
 
-        # 创建图表
-        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-        fig.suptitle('PPO Training Results', fontsize=14, fontweight='bold')
+        # 创建更大的图表 (4x2)
+        fig, axes = plt.subplots(4, 2, figsize=(16, 20))
+        fig.suptitle('PPO Training Results - Comprehensive Metrics', fontsize=16, fontweight='bold')
 
-        # 1. Reward 曲线
+        # 1. Episode Reward Mean
         ax1 = axes[0, 0]
-        ax1.plot(steps, rewards, alpha=0.3, color='blue', linewidth=0.5)
-        # 滑动平均
+        if metrics and metrics.get('ep_rew_mean'):
+            ax1.plot(metrics['timesteps'][:len(metrics['ep_rew_mean'])], metrics['ep_rew_mean'],
+                    color='blue', linewidth=1.5, label='ep_rew_mean')
+            ax1.set_xlabel('Timesteps')
+            ax1.set_ylabel('Episode Reward Mean')
+            ax1.set_title('Episode Reward Mean (Training)')
+            ax1.legend()
+        else:
+            # Fallback: use trajectory rewards with smoothing
+            window = min(1000, len(rewards) // 10) if len(rewards) > 10 else 1
+            if window > 1:
+                smoothed = np.convolve(rewards, np.ones(window)/window, mode='valid')
+                ax1.plot(range(window-1, len(rewards)), smoothed, color='blue', linewidth=1.5)
+            ax1.set_xlabel('Step')
+            ax1.set_ylabel('Reward (Smoothed)')
+            ax1.set_title('Episode Reward Mean (Smoothed)')
+        ax1.grid(True, alpha=0.3)
+
+        # 2. Episode Length Mean
+        ax2 = axes[0, 1]
+        if metrics and metrics.get('ep_len_mean'):
+            ax2.plot(metrics['timesteps'][:len(metrics['ep_len_mean'])], metrics['ep_len_mean'],
+                    color='green', linewidth=1.5)
+            ax2.set_xlabel('Timesteps')
+            ax2.set_ylabel('Episode Length')
+            ax2.set_title('Episode Length Mean')
+        else:
+            ax2.text(0.5, 0.5, 'No ep_len_mean data', ha='center', va='center', transform=ax2.transAxes)
+            ax2.set_title('Episode Length Mean (N/A)')
+        ax2.grid(True, alpha=0.3)
+
+        # 3. Explained Variance
+        ax3 = axes[1, 0]
+        if metrics and metrics.get('explained_variance'):
+            ax3.plot(metrics['explained_variance'], color='purple', linewidth=1.5)
+            ax3.axhline(y=0, color='gray', linestyle='--', alpha=0.5)
+            ax3.axhline(y=1, color='gray', linestyle='--', alpha=0.5)
+            ax3.set_xlabel('Update')
+            ax3.set_ylabel('Explained Variance')
+            ax3.set_title('Explained Variance (ideal: close to 1)')
+        else:
+            ax3.text(0.5, 0.5, 'No explained_variance data', ha='center', va='center', transform=ax3.transAxes)
+            ax3.set_title('Explained Variance (N/A)')
+        ax3.grid(True, alpha=0.3)
+
+        # 4. Approx KL & Clip Fraction
+        ax4 = axes[1, 1]
+        if metrics and (metrics.get('approx_kl') or metrics.get('clip_fraction')):
+            if metrics.get('approx_kl'):
+                ax4.plot(metrics['approx_kl'], color='red', linewidth=1.5, label='approx_kl')
+            if metrics.get('clip_fraction'):
+                ax4_twin = ax4.twinx()
+                ax4_twin.plot(metrics['clip_fraction'], color='orange', linewidth=1.5, label='clip_fraction')
+                ax4_twin.set_ylabel('Clip Fraction', color='orange')
+                ax4_twin.legend(loc='upper right')
+            ax4.set_xlabel('Update')
+            ax4.set_ylabel('Approx KL', color='red')
+            ax4.set_title('Approx KL & Clip Fraction')
+            ax4.legend(loc='upper left')
+        else:
+            ax4.text(0.5, 0.5, 'No KL/Clip data', ha='center', va='center', transform=ax4.transAxes)
+            ax4.set_title('Approx KL & Clip Fraction (N/A)')
+        ax4.grid(True, alpha=0.3)
+
+        # 5. Entropy & Std
+        ax5 = axes[2, 0]
+        if metrics and (metrics.get('entropy_loss') or metrics.get('std')):
+            if metrics.get('entropy_loss'):
+                ax5.plot(metrics['entropy_loss'], color='teal', linewidth=1.5, label='entropy_loss')
+            if metrics.get('std'):
+                ax5_twin = ax5.twinx()
+                ax5_twin.plot(metrics['std'], color='brown', linewidth=1.5, label='std')
+                ax5_twin.set_ylabel('Std', color='brown')
+                ax5_twin.legend(loc='upper right')
+            ax5.set_xlabel('Update')
+            ax5.set_ylabel('Entropy Loss', color='teal')
+            ax5.set_title('Entropy Loss & Std')
+            ax5.legend(loc='upper left')
+        else:
+            ax5.text(0.5, 0.5, 'No Entropy/Std data', ha='center', va='center', transform=ax5.transAxes)
+            ax5.set_title('Entropy & Std (N/A)')
+        ax5.grid(True, alpha=0.3)
+
+        # 6. Policy Loss & Value Loss
+        ax6 = axes[2, 1]
+        if metrics and (metrics.get('policy_loss') or metrics.get('value_loss')):
+            if metrics.get('policy_loss'):
+                ax6.plot(metrics['policy_loss'], color='blue', linewidth=1.5, label='policy_loss')
+            if metrics.get('value_loss'):
+                ax6_twin = ax6.twinx()
+                ax6_twin.plot(metrics['value_loss'], color='red', linewidth=1.5, label='value_loss')
+                ax6_twin.set_ylabel('Value Loss', color='red')
+                ax6_twin.legend(loc='upper right')
+            ax6.set_xlabel('Update')
+            ax6.set_ylabel('Policy Loss', color='blue')
+            ax6.set_title('Policy Loss & Value Loss')
+            ax6.legend(loc='upper left')
+        else:
+            ax6.text(0.5, 0.5, 'No Loss data', ha='center', va='center', transform=ax6.transAxes)
+            ax6.set_title('Policy Loss & Value Loss (N/A)')
+        ax6.grid(True, alpha=0.3)
+
+        # 7. Step Rewards (raw)
+        ax7 = axes[3, 0]
+        ax7.plot(steps, rewards, alpha=0.3, color='blue', linewidth=0.5)
         window = min(100, len(rewards) // 10) if len(rewards) > 10 else 1
         if window > 1:
             smoothed = np.convolve(rewards, np.ones(window)/window, mode='valid')
-            ax1.plot(range(window-1, len(rewards)), smoothed, color='red', linewidth=2, label=f'MA-{window}')
-            ax1.legend()
-        ax1.set_xlabel('Step')
-        ax1.set_ylabel('Reward')
-        ax1.set_title('Step Rewards')
-        ax1.grid(True, alpha=0.3)
+            ax7.plot(range(window-1, len(rewards)), smoothed, color='red', linewidth=2, label=f'MA-{window}')
+            ax7.legend()
+        ax7.set_xlabel('Step')
+        ax7.set_ylabel('Reward')
+        ax7.set_title('Step Rewards (Raw + Smoothed)')
+        ax7.grid(True, alpha=0.3)
 
-        # 2. Reward 分布
-        ax2 = axes[0, 1]
-        ax2.hist(rewards, bins=50, color='steelblue', edgecolor='white', alpha=0.7)
-        ax2.axvline(np.mean(rewards), color='red', linestyle='--', label=f'Mean: {np.mean(rewards):.2f}')
-        ax2.axvline(np.median(rewards), color='green', linestyle='--', label=f'Median: {np.median(rewards):.2f}')
-        ax2.set_xlabel('Reward')
-        ax2.set_ylabel('Count')
-        ax2.set_title('Reward Distribution')
-        ax2.legend()
-        ax2.grid(True, alpha=0.3)
-
-        # 3. 累积 Reward
-        ax3 = axes[1, 0]
-        cumsum = np.cumsum(rewards)
-        ax3.plot(steps, cumsum, color='green', linewidth=1.5)
-        ax3.set_xlabel('Step')
-        ax3.set_ylabel('Cumulative Reward')
-        ax3.set_title('Cumulative Reward')
-        ax3.grid(True, alpha=0.3)
-
-        # 4. 统计信息
-        ax4 = axes[1, 1]
-        ax4.axis('off')
+        # 8. Statistics Summary
+        ax8 = axes[3, 1]
+        ax8.axis('off')
         stats_text = f"""
-        Training Statistics
-        ─────────────────────
-        Total Steps: {len(rewards):,}
+        PPO Training Statistics
+        ═══════════════════════════════════
 
-        Reward Stats:
-          Mean:   {np.mean(rewards):.4f}
-          Std:    {np.std(rewards):.4f}
-          Min:    {np.min(rewards):.4f}
-          Max:    {np.max(rewards):.4f}
-          Median: {np.median(rewards):.4f}
+        Trajectory Data:
+          Total Steps:     {len(rewards):,}
+          Mean Reward:     {np.mean(rewards):.4f}
+          Std Reward:      {np.std(rewards):.4f}
+          Min Reward:      {np.min(rewards):.4f}
+          Max Reward:      {np.max(rewards):.4f}
 
         Percentiles:
-          25th:   {np.percentile(rewards, 25):.4f}
-          75th:   {np.percentile(rewards, 75):.4f}
-          90th:   {np.percentile(rewards, 90):.4f}
+          25th:  {np.percentile(rewards, 25):.4f}
+          50th:  {np.percentile(rewards, 50):.4f}
+          75th:  {np.percentile(rewards, 75):.4f}
+          90th:  {np.percentile(rewards, 90):.4f}
         """
-        ax4.text(0.1, 0.5, stats_text, transform=ax4.transAxes, fontsize=12,
+        ax8.text(0.1, 0.5, stats_text, transform=ax8.transAxes, fontsize=11,
                 verticalalignment='center', fontfamily='monospace',
                 bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
 
@@ -136,8 +277,18 @@ def plot_training_results(trajectory_path: str, save_dir: str):
 
         logger.info(f"📊 Training plots saved to: {plot_path}")
 
+        # 保存 metrics 数据
+        if metrics:
+            metrics_path = Path(save_dir) / "training_metrics.json"
+            with open(metrics_path, 'w') as f:
+                json.dump({k: [float(v) if isinstance(v, (int, float, np.floating)) else v for v in vals]
+                          for k, vals in metrics.items()}, f, indent=2)
+            logger.info(f"📊 Training metrics saved to: {metrics_path}")
+
     except Exception as e:
         logger.warning(f"Failed to plot training results: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 @dataclass
