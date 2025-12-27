@@ -17,7 +17,9 @@ import logging
 from typing import List, Dict, Optional, Tuple
 from collections import deque
 from dataclasses import dataclass
+from pathlib import Path
 import numpy as np
+import matplotlib.pyplot as plt
 
 from stable_baselines3.common.env_util import make_vec_env
 
@@ -91,6 +93,106 @@ class RolloutConfig:
             self.k_fewshot = int(os.getenv("K_FEWSHOT"))
         if os.getenv("FEWSHOT_ALPHA"):
             self.fewshot_alpha = float(os.getenv("FEWSHOT_ALPHA"))
+
+
+# ============================================================================
+# Plotting Functions
+# ============================================================================
+
+def plot_rollout_results(trajectory: List[Dict], save_path: str):
+    """
+    绘制 LLM Rollout 结果图表
+
+    生成的图表:
+    1. Step-by-step Reward
+    2. Reward 分布
+    3. 累积 Reward
+    4. 室内温度变化 (如果有)
+    """
+    try:
+        if not trajectory:
+            logger.warning("No trajectory data to plot")
+            return
+
+        rewards = [d.get('reward', 0) for d in trajectory]
+        steps = list(range(len(rewards)))
+
+        # 创建图表
+        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+        fig.suptitle('LLM Rollout Results', fontsize=14, fontweight='bold')
+
+        # 1. Step Rewards
+        ax1 = axes[0, 0]
+        ax1.plot(steps, rewards, color='blue', linewidth=1, alpha=0.7)
+        # 滑动平均
+        window = min(20, len(rewards) // 5) if len(rewards) > 5 else 1
+        if window > 1:
+            smoothed = np.convolve(rewards, np.ones(window)/window, mode='valid')
+            ax1.plot(range(window-1, len(rewards)), smoothed, color='red', linewidth=2, label=f'MA-{window}')
+            ax1.legend()
+        ax1.axhline(y=np.mean(rewards), color='green', linestyle='--', alpha=0.5, label=f'Mean: {np.mean(rewards):.2f}')
+        ax1.set_xlabel('Step')
+        ax1.set_ylabel('Reward')
+        ax1.set_title('Step-by-Step Rewards')
+        ax1.grid(True, alpha=0.3)
+        ax1.legend()
+
+        # 2. Reward 分布
+        ax2 = axes[0, 1]
+        ax2.hist(rewards, bins=30, color='steelblue', edgecolor='white', alpha=0.7)
+        ax2.axvline(np.mean(rewards), color='red', linestyle='--', linewidth=2, label=f'Mean: {np.mean(rewards):.2f}')
+        ax2.axvline(np.median(rewards), color='green', linestyle='--', linewidth=2, label=f'Median: {np.median(rewards):.2f}')
+        ax2.set_xlabel('Reward')
+        ax2.set_ylabel('Count')
+        ax2.set_title('Reward Distribution')
+        ax2.legend()
+        ax2.grid(True, alpha=0.3)
+
+        # 3. 累积 Reward
+        ax3 = axes[1, 0]
+        cumsum = np.cumsum(rewards)
+        ax3.plot(steps, cumsum, color='green', linewidth=1.5)
+        ax3.fill_between(steps, cumsum, alpha=0.3, color='green')
+        ax3.set_xlabel('Step')
+        ax3.set_ylabel('Cumulative Reward')
+        ax3.set_title(f'Cumulative Reward (Total: {cumsum[-1]:.2f})')
+        ax3.grid(True, alpha=0.3)
+
+        # 4. 统计信息
+        ax4 = axes[1, 1]
+        ax4.axis('off')
+        stats_text = f"""
+        LLM Rollout Statistics
+        ──────────────────────────
+        Total Steps: {len(rewards):,}
+
+        Reward Stats:
+          Mean:   {np.mean(rewards):.4f}
+          Std:    {np.std(rewards):.4f}
+          Min:    {np.min(rewards):.4f}
+          Max:    {np.max(rewards):.4f}
+          Total:  {np.sum(rewards):.4f}
+
+        Percentiles:
+          25th:   {np.percentile(rewards, 25):.4f}
+          50th:   {np.percentile(rewards, 50):.4f}
+          75th:   {np.percentile(rewards, 75):.4f}
+        """
+        ax4.text(0.1, 0.5, stats_text, transform=ax4.transAxes, fontsize=12,
+                verticalalignment='center', fontfamily='monospace',
+                bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.5))
+
+        plt.tight_layout()
+
+        # 保存
+        plot_path = Path(save_path).parent / "rollout_results.png"
+        plt.savefig(plot_path, dpi=150, bbox_inches='tight')
+        plt.close()
+
+        logger.info(f"📊 Rollout plots saved to: {plot_path}")
+
+    except Exception as e:
+        logger.warning(f"Failed to plot rollout results: {e}")
 
 
 # ============================================================================
@@ -187,7 +289,8 @@ def run_rollout(config: RolloutConfig) -> List[Dict]:
     from llm_agent_colab import call_llm, parse_actions_with_validation
     from few_shot_auto import (
         load_examples, select_examples,
-        format_few_shot_block, inject_few_shot
+        format_few_shot_block, inject_few_shot,
+        SelectionConfig
     )
     
     # Create output directory
@@ -254,11 +357,14 @@ def run_rollout(config: RolloutConfig) -> List[Dict]:
         few_block = None
         if ex_dataset:
             try:
+                selection_cfg = SelectionConfig(
+                    k=config.k_fewshot,
+                    alpha=config.fewshot_alpha
+                )
                 examples = select_examples(
                     ex_dataset,
                     current_obs=obs,
-                    k=config.k_fewshot,
-                    alpha=config.fewshot_alpha,
+                    config=selection_cfg,
                     building=config.building,
                     climate=config.climate,
                     location=config.location
@@ -372,7 +478,10 @@ def run_rollout(config: RolloutConfig) -> List[Dict]:
         logger.info(f"  Min reward: {np.min(rewards):.2f}")
         logger.info(f"  Max reward: {np.max(rewards):.2f}")
         logger.info(f"  Total reward: {np.sum(rewards):.2f}")
-    
+
+        # 绘制 Rollout 结果图表
+        plot_rollout_results(logs, config.save_path)
+
     return logs
 
 
