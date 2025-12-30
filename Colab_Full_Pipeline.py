@@ -48,6 +48,7 @@ os.chdir(PROJECT_ROOT)
 !pip install -q stable-baselines3==2.1.0 gymnasium
 !pip install -q transformers accelerate bitsandbytes peft
 !pip install -q scikit-learn matplotlib tqdm
+!pip install -q pvlib  # BEAR 环境需要
 
 print("✓ 依赖安装完成")
 
