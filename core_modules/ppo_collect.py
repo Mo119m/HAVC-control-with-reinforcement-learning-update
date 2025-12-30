@@ -64,6 +64,7 @@ class MetricsCallback(CheckpointCallback):
             'value_loss': [],
             'std': [],
         }
+        self._last_logged_step = 0
 
     def _on_rollout_end(self) -> bool:
         """Called at the end of a rollout."""
@@ -80,22 +81,47 @@ class MetricsCallback(CheckpointCallback):
 
         return True
 
-    def _on_training_end(self) -> None:
-        """Called at the end of training."""
-        # Try to get final training stats from the model's logger
-        try:
-            if hasattr(self.model, 'logger') and self.model.logger is not None:
-                # Get the last logged values
-                pass
-        except:
-            pass
+    def _on_step(self) -> bool:
+        """Called at each step."""
+        # Try to get training metrics from the model's logger
+        if hasattr(self.model, 'logger') and self.model.logger is not None:
+            # Access the logger's name_to_value dict which contains recent logged values
+            if hasattr(self.model.logger, 'name_to_value'):
+                logs = self.model.logger.name_to_value
 
-    def update_training_metrics(self, logs: dict):
-        """Update metrics from training logs."""
-        for key in ['explained_variance', 'approx_kl', 'clip_fraction', 'entropy_loss',
-                    'policy_loss', 'value_loss', 'std']:
-            if key in logs:
-                self.metrics[key].append(logs[key])
+                # Only record if we have new data (check if step changed significantly)
+                if self.num_timesteps - self._last_logged_step >= self.model.n_steps:
+                    self._last_logged_step = self.num_timesteps
+
+                    # Extract metrics
+                    if 'train/explained_variance' in logs:
+                        self.metrics['explained_variance'].append(logs['train/explained_variance'])
+                    if 'train/approx_kl' in logs:
+                        self.metrics['approx_kl'].append(logs['train/approx_kl'])
+                    if 'train/clip_fraction' in logs:
+                        self.metrics['clip_fraction'].append(logs['train/clip_fraction'])
+                    if 'train/entropy_loss' in logs:
+                        self.metrics['entropy_loss'].append(logs['train/entropy_loss'])
+                    if 'train/policy_gradient_loss' in logs:
+                        self.metrics['policy_loss'].append(logs['train/policy_gradient_loss'])
+                    if 'train/value_loss' in logs:
+                        self.metrics['value_loss'].append(logs['train/value_loss'])
+                    if 'train/std' in logs:
+                        self.metrics['std'].append(logs['train/std'])
+
+        return super()._on_step()
+
+    def _on_training_end(self) -> None:
+        """Called at the end of training - save metrics."""
+        # Save metrics to JSON
+        metrics_path = Path(self.save_path).parent / "training_metrics.json"
+        try:
+            with open(metrics_path, 'w') as f:
+                json.dump({k: [float(v) if isinstance(v, (int, float, np.floating)) else v
+                              for v in vals] for k, vals in self.metrics.items()}, f, indent=2)
+            logger.info(f"📊 Training metrics saved to: {metrics_path}")
+        except Exception as e:
+            logger.warning(f"Failed to save metrics: {e}")
 
 
 def plot_training_results(trajectory_path: str, save_dir: str, metrics: dict = None):
@@ -115,6 +141,14 @@ def plot_training_results(trajectory_path: str, save_dir: str, metrics: dict = N
     try:
         with open(trajectory_path, 'r') as f:
             data = json.load(f)
+
+        # Try to load metrics from file if not provided
+        if metrics is None:
+            metrics_path = Path(save_dir) / "training_metrics.json"
+            if metrics_path.exists():
+                with open(metrics_path, 'r') as f:
+                    metrics = json.load(f)
+                logger.info(f"Loaded training metrics from {metrics_path}")
 
         if not data:
             logger.warning("No trajectory data to plot")
@@ -420,18 +454,18 @@ def create_model(
 def setup_callbacks(config: CollectionConfig):
     """
     Setup training callbacks.
-    
+
     Args:
         config: Collection configuration
-        
+
     Returns:
-        Combined callback list
+        Tuple of (callback_list, metrics_callback)
     """
     save_dir = Path(config.save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
-    
+
     callbacks = []
-    
+
     # Trajectory recorder
     traj_path = save_dir / "ppo_trajectory.json"
     recorder = TrajectoryRecorder(
@@ -440,16 +474,17 @@ def setup_callbacks(config: CollectionConfig):
         auto_save_interval=10000  # Save every 10k steps
     )
     callbacks.append(recorder)
-    
-    # Checkpoint saver
-    checkpoint_callback = CheckpointCallback(
+
+    # Metrics callback (collects PPO training metrics for plotting)
+    metrics_callback = MetricsCallback(
         save_freq=config.checkpoint_freq,
         save_path=str(save_dir / "checkpoints"),
-        name_prefix="ppo_model"
+        name_prefix="ppo_model",
+        verbose=1
     )
-    callbacks.append(checkpoint_callback)
-    
-    return CallbackList(callbacks)
+    callbacks.append(metrics_callback)
+
+    return CallbackList(callbacks), metrics_callback
 
 
 def save_config(config: CollectionConfig, save_dir: Path) -> None:
@@ -511,10 +546,10 @@ def main():
         
         # Create model
         model = create_model(env, config, resume_from=config.resume_from)
-        
+
         # Setup callbacks
-        callback = setup_callbacks(config)
-        
+        callback, metrics_callback = setup_callbacks(config)
+
         # Train
         logger.info(f"Training for {config.total_steps} steps")
         model.learn(
@@ -522,16 +557,20 @@ def main():
             callback=callback,
             progress_bar=True  # Show progress bar
         )
-        
+
         # Save final model
         model_path = save_dir / "ppo_final.zip"
         model.save(str(model_path))
         logger.info(f"Saved final model to {model_path}")
 
-        # 绘制训练结果图表
+        # 绘制训练结果图表 (使用收集的 metrics)
         trajectory_path = save_dir / "ppo_trajectory.json"
         if trajectory_path.exists():
-            plot_training_results(str(trajectory_path), str(save_dir))
+            plot_training_results(
+                str(trajectory_path),
+                str(save_dir),
+                metrics=metrics_callback.metrics
+            )
 
         logger.info("Training complete!")
         
