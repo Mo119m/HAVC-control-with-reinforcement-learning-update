@@ -48,6 +48,7 @@ os.chdir(PROJECT_ROOT)
 !pip install -q stable-baselines3==2.1.0 gymnasium
 !pip install -q transformers accelerate bitsandbytes peft
 !pip install -q scikit-learn matplotlib tqdm
+!pip install -q pvlib  # BEAR 环境需要
 
 print("✓ 依赖安装完成")
 
@@ -70,24 +71,33 @@ except ImportError as e:
 import os
 import shutil
 
-# 数据源和目标路径
-DRIVE_DATA = "/content/drive/MyDrive/rl/Data"
+# 可能的数据路径（按优先级）
+POSSIBLE_DATA_PATHS = [
+    "/content/drive/MyDrive/rl/Data",
+    "/content/drive/MyDrive/HAVC-control-with-reinforcement-learning-update/Data",
+    "/content/drive/MyDrive/Data",
+]
+
 BEAR_DATA = "/content/HAVC-control-with-reinforcement-learning-update/BEAR/Data"
+os.makedirs(BEAR_DATA, exist_ok=True)
 
-# 检查数据位置
-if os.path.exists(DRIVE_DATA):
-    # 从 Google Drive 复制数据
-    if not os.path.exists(BEAR_DATA) or len(os.listdir(BEAR_DATA)) == 0:
-        os.makedirs(BEAR_DATA, exist_ok=True)
-        !cp -r {DRIVE_DATA}/* {BEAR_DATA}/
-        print(f"✓ 数据已从 Google Drive 复制到 {BEAR_DATA}")
-    else:
-        print(f"✓ 数据已存在于 {BEAR_DATA}")
-else:
-    print(f"⚠ 请先上传数据到 {DRIVE_DATA}")
-    print("  数据应包含: OfficeSmall/Hot_Dry/ 等目录")
+# 查找数据源
+data_found = False
+for data_path in POSSIBLE_DATA_PATHS:
+    if os.path.exists(data_path):
+        print(f"✓ 找到数据: {data_path}")
+        !cp -r "{data_path}"/* {BEAR_DATA}/
+        print(f"✓ 数据已复制到 {BEAR_DATA}")
+        data_found = True
+        break
 
-# 验证数据
+if not data_found:
+    print("⚠ 未找到数据，请将数据上传到以下任一位置:")
+    for p in POSSIBLE_DATA_PATHS:
+        print(f"   - {p}")
+
+# 显示数据内容
+print(f"\nBEAR/Data 目录内容:")
 !ls {BEAR_DATA}/
 
 # %% [markdown]
