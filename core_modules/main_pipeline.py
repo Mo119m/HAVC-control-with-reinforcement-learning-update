@@ -179,7 +179,7 @@ class Pipeline:
         
         try:
             result = subprocess.run(
-                ["python", "ppo_collect.py"],
+                ["python", "core_modules/ppo_collect.py"],
                 env=env,
                 check=True,
                 capture_output=True,
@@ -210,7 +210,7 @@ class Pipeline:
             return False
         
         cmd = [
-            "python", "select_representative.py",
+            "python", "core_modules/select_representative.py",
             "--traj", str(self.paths["ppo_trajectory"]),
             "--out_dir", str(Path(self.config.base_dir) / self.config.samples_dir),
             "--preselect", str(self.config.preselect),
@@ -272,7 +272,7 @@ class Pipeline:
 
         try:
             result = subprocess.run(
-                ["python", "rollout_fewshot_version.py"],
+                ["python", "core_modules/rollout_fewshot_version.py"],
                 env=env,
                 check=True,
                 capture_output=True,
@@ -317,7 +317,7 @@ class Pipeline:
         
         try:
             result = subprocess.run(
-                ["python", "7b_finetune_fixed.py"],
+                ["python", "core_modules/7b_finetune_fixed.py"],
                 env=env,
                 check=True,
                 capture_output=True,
@@ -357,7 +357,7 @@ class Pipeline:
         
         # Plot comparison
         cmd = [
-            "python", "draw_reward.py",
+            "python", "core_modules/draw_reward.py",
             *trajectories,
             "--output", str(self.paths["eval_plots"]),
             "--smooth", "5",

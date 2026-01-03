@@ -34,7 +34,7 @@ except ImportError:
     BEAR_AVAILABLE = False
     print("Warning: BEAR environment not available")
 
-from recorder_v2 import TrajectoryRecorder
+from core_modules.recorder_v2 import TrajectoryRecorder
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
