@@ -20,6 +20,13 @@ from pathlib import Path
 from typing import Optional, List
 from dataclasses import dataclass, asdict
 
+# Add project root to path for imports
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+from core_modules.visualization_pipeline import PipelineVisualizer
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
@@ -43,6 +50,7 @@ class PipelineConfig:
     llm_rollout_dir: str = "03_llm_rollout"
     finetune_dir: str = "04_finetuning"
     eval_dir: str = "05_evaluation"
+    reports_dir: str = "reports"
     
     # PPO Training
     ppo_total_steps: int = 500000
@@ -105,16 +113,23 @@ class PipelineConfig:
 
 class Pipeline:
     """Main pipeline orchestrator"""
-    
+
     def __init__(self, config: PipelineConfig):
         self.config = config
         self.paths = config.get_paths()
         self._create_directories()
+
+        # Initialize visualizer
+        reports_path = Path(self.config.base_dir) / self.config.reports_dir
+        self.visualizer = PipelineVisualizer(
+            pipeline_dir=self.config.base_dir,
+            output_dir=str(reports_path)
+        )
     
     def _create_directories(self):
         """Create all necessary directories"""
         base = Path(self.config.base_dir)
-        
+
         dirs = [
             base / self.config.ppo_dir,
             base / self.config.ppo_dir / "checkpoints",
@@ -122,8 +137,9 @@ class Pipeline:
             base / self.config.llm_rollout_dir,
             base / self.config.finetune_dir,
             base / self.config.eval_dir,
+            base / self.config.reports_dir,
         ]
-        
+
         for d in dirs:
             d.mkdir(parents=True, exist_ok=True)
             logger.info(f"Created directory: {d}")
@@ -188,12 +204,20 @@ class Pipeline:
             
             logger.info("PPO training completed")
             logger.debug(result.stdout)
-            
+
             # Verify output
             if not self.paths["ppo_trajectory"].exists():
                 logger.error("PPO trajectory file not found")
                 return False
-            
+
+            # Generate visualizations
+            logger.info("Generating PPO training visualizations...")
+            try:
+                self.visualizer.visualize_stage1_ppo()
+                logger.info("✅ PPO visualizations saved")
+            except Exception as e:
+                logger.warning(f"Failed to generate PPO visualizations: {e}")
+
             return True
         
         except subprocess.CalledProcessError as e:
@@ -231,12 +255,20 @@ class Pipeline:
             
             logger.info("Sample selection completed")
             logger.debug(result.stdout)
-            
+
             # Verify output
             if not self.paths["fewshot_json"].exists():
                 logger.error("Few-shot examples file not found")
                 return False
-            
+
+            # Generate visualizations
+            logger.info("Generating few-shot selection visualizations...")
+            try:
+                self.visualizer.visualize_stage2_fewshot()
+                logger.info("✅ Few-shot selection visualizations saved")
+            except Exception as e:
+                logger.warning(f"Failed to generate few-shot visualizations: {e}")
+
             return True
         
         except subprocess.CalledProcessError as e:
@@ -288,6 +320,14 @@ class Pipeline:
                 logger.error("LLM rollout trajectory file not found")
                 return False
 
+            # Generate visualizations
+            logger.info("Generating LLM rollout visualizations...")
+            try:
+                self.visualizer.visualize_stage3_llm_rollout()
+                logger.info("✅ LLM rollout visualizations saved")
+            except Exception as e:
+                logger.warning(f"Failed to generate LLM rollout visualizations: {e}")
+
             return True
 
         except subprocess.CalledProcessError as e:
@@ -327,7 +367,15 @@ class Pipeline:
             
             logger.info("Fine-tuning completed")
             logger.debug(result.stdout)
-            
+
+            # Generate visualizations
+            logger.info("Generating fine-tuning visualizations...")
+            try:
+                self.visualizer.visualize_stage4_self_distillation()
+                logger.info("✅ Fine-tuning visualizations saved")
+            except Exception as e:
+                logger.warning(f"Failed to generate fine-tuning visualizations: {e}")
+
             return True
         
         except subprocess.CalledProcessError as e:
@@ -373,16 +421,24 @@ class Pipeline:
             
             logger.info("Evaluation completed")
             logger.debug(result.stdout)
-            
+
             # Save evaluation results
             results = {
                 "trajectories_evaluated": len(trajectories),
                 "plot_path": str(self.paths["eval_plots"]),
             }
-            
+
             with open(self.paths["eval_results"], "w") as f:
                 json.dump(results, f, indent=2)
-            
+
+            # Generate comprehensive comparison visualizations
+            logger.info("Generating final comparison visualizations...")
+            try:
+                self.visualizer.visualize_stage6_final_comparison()
+                logger.info("✅ Final comparison visualizations saved")
+            except Exception as e:
+                logger.warning(f"Failed to generate final comparison visualizations: {e}")
+
             return True
         
         except subprocess.CalledProcessError as e:
@@ -461,7 +517,7 @@ def main():
         logger.info("PIPELINE COMPLETED SUCCESSFULLY!")
         logger.info("="*60)
         logger.info(f"Results saved to: {config.base_dir}")
-        
+
         # Print paths
         paths = config.get_paths()
         logger.info("\nKey outputs:")
@@ -470,7 +526,16 @@ def main():
                 logger.info(f"  ✅ {name}: {path}")
             else:
                 logger.info(f"  ⏳ {name}: {path} (pending)")
-        
+
+        # Print visualization reports
+        reports_dir = Path(config.base_dir) / config.reports_dir
+        logger.info(f"\nVisualization reports:")
+        logger.info(f"  📊 Reports directory: {reports_dir}")
+        if reports_dir.exists():
+            report_files = sorted(reports_dir.glob("*.png"))
+            for report_file in report_files:
+                logger.info(f"  ✅ {report_file.name}")
+
         sys.exit(0)
     else:
         logger.error("\n" + "="*60)

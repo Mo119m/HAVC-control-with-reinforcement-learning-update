@@ -20,6 +20,7 @@ scipy>=1.11.0
 
 # Visualization
 matplotlib>=3.7.0
+seaborn>=0.12.0
 
 # Weather/Solar calculations
 pvlib>=0.10.0
