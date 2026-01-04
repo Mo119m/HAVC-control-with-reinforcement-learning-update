@@ -12,11 +12,17 @@ Key Features:
 """
 
 import os
+import sys
 import json
 import logging
 from pathlib import Path
 from typing import Optional, List
 from dataclasses import dataclass
+
+# Add project root to Python path
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
 import torch
 import numpy as np
