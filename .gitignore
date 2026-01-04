@@ -42,6 +42,7 @@ Thumbs.db
 
 # Project specific
 pipeline_output/
+runs_*/
 *.zip
 *.pt
 *.pth
