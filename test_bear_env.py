@@ -34,7 +34,10 @@ def test_bear_environment():
         print("\n3. 检查环境属性:")
         print(f"   观察空间: {env.observation_space}")
         print(f"   动作空间: {env.action_space}")
-        print(f"   最大步数: {param.max_steps}")
+        if isinstance(param, dict):
+            print(f"   最大步数: {param.get('max_steps', 'N/A')}")
+        else:
+            print(f"   最大步数: {param.max_steps}")
 
         # 重置环境
         print("\n4. 重置环境...")
