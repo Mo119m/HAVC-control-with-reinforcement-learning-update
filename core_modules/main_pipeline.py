@@ -183,7 +183,7 @@ class Pipeline:
     def _run_ppo_training(self) -> bool:
         """Stage 1: PPO Training"""
         logger.info("Starting PPO training...")
-        
+
         env = {
             **os.environ,
             "BUILDING": self.config.building,
@@ -192,18 +192,19 @@ class Pipeline:
             "TOTAL_STEPS": str(self.config.ppo_total_steps),
             "SAVE_DIR": str(Path(self.config.base_dir) / self.config.ppo_dir),
         }
-        
+
         try:
+            # Run with real-time output streaming
             result = subprocess.run(
                 ["python", "core_modules/ppo_collect.py"],
                 env=env,
                 check=True,
-                capture_output=True,
-                text=True
+                # Don't capture output - let it stream to console in real-time
+                stdout=None,
+                stderr=None
             )
-            
+
             logger.info("PPO training completed")
-            logger.debug(result.stdout)
 
             # Verify output
             if not self.paths["ppo_trajectory"].exists():
@@ -219,10 +220,9 @@ class Pipeline:
                 logger.warning(f"Failed to generate PPO visualizations: {e}")
 
             return True
-        
+
         except subprocess.CalledProcessError as e:
             logger.error(f"PPO training failed: {e}")
-            logger.error(e.stderr)
             return False
     
     def _run_sample_selection(self) -> bool:
@@ -246,15 +246,15 @@ class Pipeline:
         ]
         
         try:
+            # Run with real-time output streaming
             result = subprocess.run(
                 cmd,
                 check=True,
-                capture_output=True,
-                text=True
+                stdout=None,
+                stderr=None
             )
-            
+
             logger.info("Sample selection completed")
-            logger.debug(result.stdout)
 
             # Verify output
             if not self.paths["fewshot_json"].exists():
@@ -270,10 +270,9 @@ class Pipeline:
                 logger.warning(f"Failed to generate few-shot visualizations: {e}")
 
             return True
-        
+
         except subprocess.CalledProcessError as e:
             logger.error(f"Sample selection failed: {e}")
-            logger.error(e.stderr)
             return False
     
     def _run_llm_rollout(self) -> bool:
@@ -303,17 +302,17 @@ class Pipeline:
         logger.info(f"Output: {self.paths['llm_rollout_trajectory']}")
 
         try:
+            # Run with real-time output streaming
             result = subprocess.run(
                 ["python", "core_modules/rollout_fewshot_version.py"],
                 env=env,
                 check=True,
-                capture_output=True,
-                text=True,
+                stdout=None,
+                stderr=None,
                 timeout=7200  # 2 hours timeout
             )
 
             logger.info("LLM rollout completed")
-            logger.debug(result.stdout)
 
             # Verify output
             if not self.paths["llm_rollout_trajectory"].exists():
@@ -332,7 +331,6 @@ class Pipeline:
 
         except subprocess.CalledProcessError as e:
             logger.error(f"LLM rollout failed: {e}")
-            logger.error(e.stderr)
             return False
         except subprocess.TimeoutExpired:
             logger.error("LLM rollout timed out")
@@ -356,17 +354,17 @@ class Pipeline:
         }
         
         try:
+            # Run with real-time output streaming
             result = subprocess.run(
                 ["python", "core_modules/7b_finetune_fixed.py"],
                 env=env,
                 check=True,
-                capture_output=True,
-                text=True,
+                stdout=None,
+                stderr=None,
                 timeout=7200  # 2 hours timeout
             )
-            
+
             logger.info("Fine-tuning completed")
-            logger.debug(result.stdout)
 
             # Generate visualizations
             logger.info("Generating fine-tuning visualizations...")
@@ -377,10 +375,9 @@ class Pipeline:
                 logger.warning(f"Failed to generate fine-tuning visualizations: {e}")
 
             return True
-        
+
         except subprocess.CalledProcessError as e:
             logger.error(f"Fine-tuning failed: {e}")
-            logger.error(e.stderr)
             return False
         except subprocess.TimeoutExpired:
             logger.error("Fine-tuning timed out")
@@ -412,15 +409,15 @@ class Pipeline:
         ]
         
         try:
+            # Run with real-time output streaming
             result = subprocess.run(
                 cmd,
                 check=True,
-                capture_output=True,
-                text=True
+                stdout=None,
+                stderr=None
             )
-            
+
             logger.info("Evaluation completed")
-            logger.debug(result.stdout)
 
             # Save evaluation results
             results = {
@@ -440,10 +437,9 @@ class Pipeline:
                 logger.warning(f"Failed to generate final comparison visualizations: {e}")
 
             return True
-        
+
         except subprocess.CalledProcessError as e:
             logger.error(f"Evaluation failed: {e}")
-            logger.error(e.stderr)
             return False
 
 
