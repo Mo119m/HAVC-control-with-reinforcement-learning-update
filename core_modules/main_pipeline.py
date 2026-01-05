@@ -26,6 +26,7 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 from core_modules.visualization_pipeline import PipelineVisualizer
+from core_modules.drive_backup import DriveBackup
 
 logging.basicConfig(
     level=logging.INFO,
@@ -76,7 +77,11 @@ class PipelineConfig:
     
     # Evaluation
     eval_episodes: int = 10
-    
+
+    # Drive Backup (optional)
+    drive_backup_path: Optional[str] = None  # e.g., "/content/drive/MyDrive/HVAC-RL-Backup"
+    resume_from_backup: bool = True  # Try to resume from backup if available
+
     def get_paths(self):
         """Get all relevant paths"""
         base = Path(self.base_dir)
@@ -125,6 +130,13 @@ class Pipeline:
             pipeline_dir=self.config.base_dir,
             output_dir=str(reports_path)
         )
+
+        # Initialize Drive backup
+        self.drive_backup = DriveBackup(
+            drive_path=self.config.drive_backup_path,
+            local_path=self.config.base_dir
+        )
+        self.drive_backup.print_backup_status()
     
     def _create_directories(self):
         """Create all necessary directories"""
@@ -143,6 +155,31 @@ class Pipeline:
         for d in dirs:
             d.mkdir(parents=True, exist_ok=True)
             logger.info(f"Created directory: {d}")
+
+    def _backup_stage(self, stage_name: str, stage_dir: str):
+        """Backup a stage to Drive after completion"""
+        if self.drive_backup.enabled:
+            self.drive_backup.backup_stage(stage_name, stage_dir)
+            # Also backup reports if they exist
+            reports_dir = Path(self.config.base_dir) / self.config.reports_dir
+            if reports_dir.exists():
+                self.drive_backup.backup_reports(str(reports_dir))
+
+    def _try_restore_stage(self, stage_name: str, stage_dir: str) -> bool:
+        """
+        Try to restore a stage from Drive backup.
+
+        Returns:
+            True if successfully restored, False otherwise
+        """
+        if not self.config.resume_from_backup:
+            return False
+
+        if self.drive_backup.check_stage_exists(stage_name):
+            logger.info(f"Found backup for {stage_name}, attempting to restore...")
+            return self.drive_backup.restore_stage(stage_name, stage_dir)
+
+        return False
     
     def run_stage(self, stage: str) -> bool:
         """
@@ -182,28 +219,38 @@ class Pipeline:
     
     def _run_ppo_training(self) -> bool:
         """Stage 1: PPO Training"""
+        stage_name = self.config.ppo_dir
+        stage_path = str(Path(self.config.base_dir) / stage_name)
+
+        # Try to restore from backup
+        if self._try_restore_stage(stage_name, stage_path):
+            if self.paths["ppo_trajectory"].exists():
+                logger.info("✅ PPO training restored from backup, skipping training")
+                return True
+
         logger.info("Starting PPO training...")
-        
+
         env = {
             **os.environ,
             "BUILDING": self.config.building,
             "WEATHER": self.config.weather,
             "LOCATION": self.config.location,
             "TOTAL_STEPS": str(self.config.ppo_total_steps),
-            "SAVE_DIR": str(Path(self.config.base_dir) / self.config.ppo_dir),
+            "SAVE_DIR": stage_path,
         }
-        
+
         try:
+            # Run with real-time output streaming
             result = subprocess.run(
                 ["python", "core_modules/ppo_collect.py"],
                 env=env,
                 check=True,
-                capture_output=True,
-                text=True
+                # Don't capture output - let it stream to console in real-time
+                stdout=None,
+                stderr=None
             )
-            
+
             logger.info("PPO training completed")
-            logger.debug(result.stdout)
 
             # Verify output
             if not self.paths["ppo_trajectory"].exists():
@@ -218,17 +265,28 @@ class Pipeline:
             except Exception as e:
                 logger.warning(f"Failed to generate PPO visualizations: {e}")
 
+            # Backup to Drive
+            self._backup_stage(stage_name, stage_path)
+
             return True
-        
+
         except subprocess.CalledProcessError as e:
             logger.error(f"PPO training failed: {e}")
-            logger.error(e.stderr)
             return False
     
     def _run_sample_selection(self) -> bool:
         """Stage 2: Sample Selection"""
+        stage_name = self.config.samples_dir
+        stage_path = str(Path(self.config.base_dir) / stage_name)
+
+        # Try to restore from backup
+        if self._try_restore_stage(stage_name, stage_path):
+            if self.paths["fewshot_json"].exists():
+                logger.info("✅ Sample selection restored from backup, skipping selection")
+                return True
+
         logger.info("Starting sample selection...")
-        
+
         if not self.paths["ppo_trajectory"].exists():
             logger.error("PPO trajectory not found, run 'ppo' stage first")
             return False
@@ -246,15 +304,15 @@ class Pipeline:
         ]
         
         try:
+            # Run with real-time output streaming
             result = subprocess.run(
                 cmd,
                 check=True,
-                capture_output=True,
-                text=True
+                stdout=None,
+                stderr=None
             )
-            
+
             logger.info("Sample selection completed")
-            logger.debug(result.stdout)
 
             # Verify output
             if not self.paths["fewshot_json"].exists():
@@ -269,15 +327,26 @@ class Pipeline:
             except Exception as e:
                 logger.warning(f"Failed to generate few-shot visualizations: {e}")
 
+            # Backup to Drive
+            self._backup_stage(stage_name, stage_path)
+
             return True
-        
+
         except subprocess.CalledProcessError as e:
             logger.error(f"Sample selection failed: {e}")
-            logger.error(e.stderr)
             return False
     
     def _run_llm_rollout(self) -> bool:
         """Stage 3: LLM Rollout"""
+        stage_name = self.config.llm_rollout_dir
+        stage_path = str(Path(self.config.base_dir) / stage_name)
+
+        # Try to restore from backup
+        if self._try_restore_stage(stage_name, stage_path):
+            if self.paths["llm_rollout_trajectory"].exists():
+                logger.info("✅ LLM rollout restored from backup, skipping rollout")
+                return True
+
         logger.info("Starting LLM rollout...")
 
         if not self.paths["fewshot_json"].exists():
@@ -303,17 +372,17 @@ class Pipeline:
         logger.info(f"Output: {self.paths['llm_rollout_trajectory']}")
 
         try:
+            # Run with real-time output streaming
             result = subprocess.run(
                 ["python", "core_modules/rollout_fewshot_version.py"],
                 env=env,
                 check=True,
-                capture_output=True,
-                text=True,
+                stdout=None,
+                stderr=None,
                 timeout=7200  # 2 hours timeout
             )
 
             logger.info("LLM rollout completed")
-            logger.debug(result.stdout)
 
             # Verify output
             if not self.paths["llm_rollout_trajectory"].exists():
@@ -328,11 +397,13 @@ class Pipeline:
             except Exception as e:
                 logger.warning(f"Failed to generate LLM rollout visualizations: {e}")
 
+            # Backup to Drive
+            self._backup_stage(stage_name, stage_path)
+
             return True
 
         except subprocess.CalledProcessError as e:
             logger.error(f"LLM rollout failed: {e}")
-            logger.error(e.stderr)
             return False
         except subprocess.TimeoutExpired:
             logger.error("LLM rollout timed out")
@@ -340,8 +411,18 @@ class Pipeline:
     
     def _run_finetuning(self) -> bool:
         """Stage 4: Fine-tuning"""
+        stage_name = self.config.finetune_dir
+        stage_path = str(Path(self.config.base_dir) / stage_name)
+
+        # Try to restore from backup
+        if self._try_restore_stage(stage_name, stage_path):
+            finetune_model = Path(stage_path) / "final_model"
+            if finetune_model.exists():
+                logger.info("✅ Fine-tuning restored from backup, skipping training")
+                return True
+
         logger.info("Starting fine-tuning...")
-        
+
         if not self.paths["llm_rollout_trajectory"].exists():
             logger.error("LLM rollout trajectory not found, run 'rollout' stage first")
             return False
@@ -356,17 +437,17 @@ class Pipeline:
         }
         
         try:
+            # Run with real-time output streaming
             result = subprocess.run(
                 ["python", "core_modules/7b_finetune_fixed.py"],
                 env=env,
                 check=True,
-                capture_output=True,
-                text=True,
+                stdout=None,
+                stderr=None,
                 timeout=7200  # 2 hours timeout
             )
-            
+
             logger.info("Fine-tuning completed")
-            logger.debug(result.stdout)
 
             # Generate visualizations
             logger.info("Generating fine-tuning visualizations...")
@@ -376,11 +457,13 @@ class Pipeline:
             except Exception as e:
                 logger.warning(f"Failed to generate fine-tuning visualizations: {e}")
 
+            # Backup to Drive
+            self._backup_stage(stage_name, stage_path)
+
             return True
-        
+
         except subprocess.CalledProcessError as e:
             logger.error(f"Fine-tuning failed: {e}")
-            logger.error(e.stderr)
             return False
         except subprocess.TimeoutExpired:
             logger.error("Fine-tuning timed out")
@@ -388,8 +471,17 @@ class Pipeline:
     
     def _run_evaluation(self) -> bool:
         """Stage 5: Evaluation"""
+        stage_name = self.config.eval_dir
+        stage_path = str(Path(self.config.base_dir) / stage_name)
+
+        # Try to restore from backup
+        if self._try_restore_stage(stage_name, stage_path):
+            if self.paths["eval_results"].exists():
+                logger.info("✅ Evaluation restored from backup, skipping evaluation")
+                return True
+
         logger.info("Starting evaluation...")
-        
+
         # Collect all trajectory files
         trajectories = []
         
@@ -412,15 +504,15 @@ class Pipeline:
         ]
         
         try:
+            # Run with real-time output streaming
             result = subprocess.run(
                 cmd,
                 check=True,
-                capture_output=True,
-                text=True
+                stdout=None,
+                stderr=None
             )
-            
+
             logger.info("Evaluation completed")
-            logger.debug(result.stdout)
 
             # Save evaluation results
             results = {
@@ -439,11 +531,13 @@ class Pipeline:
             except Exception as e:
                 logger.warning(f"Failed to generate final comparison visualizations: {e}")
 
+            # Backup to Drive
+            self._backup_stage(stage_name, stage_path)
+
             return True
-        
+
         except subprocess.CalledProcessError as e:
             logger.error(f"Evaluation failed: {e}")
-            logger.error(e.stderr)
             return False
 
 
@@ -475,7 +569,17 @@ def main():
         type=str,
         help="Weather type (overrides config)"
     )
-    
+    parser.add_argument(
+        "--drive_backup",
+        type=str,
+        help="Google Drive backup path (e.g., /content/drive/MyDrive/HVAC-RL-Backup)"
+    )
+    parser.add_argument(
+        "--no_resume",
+        action="store_true",
+        help="Disable resuming from backup (always run all stages)"
+    )
+
     args = parser.parse_args()
     
     # Load or create config
@@ -491,6 +595,10 @@ def main():
         config.building = args.building
     if args.weather:
         config.weather = args.weather
+    if args.drive_backup:
+        config.drive_backup_path = args.drive_backup
+    if args.no_resume:
+        config.resume_from_backup = False
     
     # Save config
     config_path = Path(config.base_dir) / "pipeline_config.json"
