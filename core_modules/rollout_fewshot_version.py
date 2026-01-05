@@ -21,6 +21,11 @@ from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 
+# Add project root to Python path
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
 from stable_baselines3.common.env_util import make_vec_env
 
 try:
