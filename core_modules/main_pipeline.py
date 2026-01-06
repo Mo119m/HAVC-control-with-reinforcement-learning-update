@@ -260,7 +260,7 @@ class Pipeline:
             # Generate visualizations
             logger.info("Generating PPO training visualizations...")
             try:
-                self.visualizer.visualize_stage1_ppo()
+                self.visualizer.visualize_ppo_training()
                 logger.info("✅ PPO visualizations saved")
             except Exception as e:
                 logger.warning(f"Failed to generate PPO visualizations: {e}")
@@ -322,7 +322,7 @@ class Pipeline:
             # Generate visualizations
             logger.info("Generating few-shot selection visualizations...")
             try:
-                self.visualizer.visualize_stage2_fewshot()
+                self.visualizer.visualize_fewshot_selection()
                 logger.info("✅ Few-shot selection visualizations saved")
             except Exception as e:
                 logger.warning(f"Failed to generate few-shot visualizations: {e}")
@@ -392,7 +392,7 @@ class Pipeline:
             # Generate visualizations
             logger.info("Generating LLM rollout visualizations...")
             try:
-                self.visualizer.visualize_stage3_llm_rollout()
+                self.visualizer.visualize_llm_rollout()
                 logger.info("✅ LLM rollout visualizations saved")
             except Exception as e:
                 logger.warning(f"Failed to generate LLM rollout visualizations: {e}")
@@ -452,7 +452,7 @@ class Pipeline:
             # Generate visualizations
             logger.info("Generating fine-tuning visualizations...")
             try:
-                self.visualizer.visualize_stage4_self_distillation()
+                self.visualizer.visualize_self_distillation()
                 logger.info("✅ Fine-tuning visualizations saved")
             except Exception as e:
                 logger.warning(f"Failed to generate fine-tuning visualizations: {e}")
@@ -526,7 +526,7 @@ class Pipeline:
             # Generate comprehensive comparison visualizations
             logger.info("Generating final comparison visualizations...")
             try:
-                self.visualizer.visualize_stage6_final_comparison()
+                self.visualizer.visualize_final_comparison()
                 logger.info("✅ Final comparison visualizations saved")
             except Exception as e:
                 logger.warning(f"Failed to generate final comparison visualizations: {e}")
