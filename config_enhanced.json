@@ -1,0 +1,38 @@
+{
+  "_comment": "Enhanced Configuration for Better Performance",
+
+  "building": "OfficeSmall",
+  "weather": "Hot_Dry",
+  "location": "Tucson",
+
+  "base_dir": "./pipeline_output",
+
+  "ppo_total_steps": 500000,
+  "ppo_checkpoint_freq": 50000,
+
+  "_comment_fewshot": "Increased expert examples: 20 clusters × 30 = 600 samples",
+  "preselect": 3000,
+  "clusters": 20,
+  "n_per_cluster": 30,
+  "min_reward_percentile": 0.5,
+
+  "_comment_llm": "LLM rollout configuration - need to add episode support",
+  "model_name": "Qwen/Qwen2.5-7B-Instruct",
+  "temperature": 0.7,
+  "k_fewshot": 5,
+  "fewshot_alpha": 0.6,
+
+  "_comment_finetune": "More epochs for better convergence",
+  "finetune_epochs": 6,
+  "finetune_lr": 1e-5,
+  "finetune_batch_size": 1,
+  "finetune_grad_accum": 8,
+
+  "eval_episodes": 20,
+
+  "_comment_backup": "Google Drive backup",
+  "drive_backup_path": "/content/drive/MyDrive/HVAC-RL-Backup",
+  "resume_from_backup": true,
+
+  "_comment_future": "Future enhancement: iterative_rounds for self-improvement loop"
+}
