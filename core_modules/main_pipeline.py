@@ -115,7 +115,9 @@ class PipelineConfig:
         """Load config from JSON"""
         with open(path, "r") as f:
             data = json.load(f)
-        return cls(**data)
+        # Filter out comment fields (keys starting with '_comment')
+        filtered_data = {k: v for k, v in data.items() if not k.startswith('_comment')}
+        return cls(**filtered_data)
 
 
 class Pipeline:
