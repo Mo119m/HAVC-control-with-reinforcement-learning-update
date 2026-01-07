@@ -61,6 +61,7 @@ class RolloutConfig:
 
     # Rollout
     max_steps: int = 200
+    num_episodes: int = 1  # Number of episodes to run
     hist_keep: int = 6
     hist_lines_in_prompt: int = 3
 
@@ -92,6 +93,8 @@ class RolloutConfig:
 
         if os.getenv("MAX_STEPS"):
             self.max_steps = int(os.getenv("MAX_STEPS"))
+        if os.getenv("NUM_EPISODES"):
+            self.num_episodes = int(os.getenv("NUM_EPISODES"))
         if os.getenv("FEWSHOT_JSON"):
             self.fewshot_json = os.getenv("FEWSHOT_JSON")
         if os.getenv("K_FEWSHOT"):
@@ -279,15 +282,16 @@ def save_checkpoint(
 # Main Rollout
 # ============================================================================
 
-def run_rollout(config: RolloutConfig) -> List[Dict]:
+def run_single_episode(config: RolloutConfig, episode_num: int = 0) -> List[Dict]:
     """
-    Run LLM rollout with few-shot examples.
-    
+    Run a single episode of LLM rollout with few-shot examples.
+
     Args:
         config: Rollout configuration
-        
+        episode_num: Episode number (for logging)
+
     Returns:
-        List of log entries
+        List of log entries for this episode
     """
     # Import here to avoid circular dependency
     from prompt_builder_control import build_prompt, zone_count_from_obs
@@ -338,7 +342,7 @@ def run_rollout(config: RolloutConfig) -> List[Dict]:
     
     # Main loop
     for step in range(config.max_steps):
-        logger.info(f"Step {step+1}/{config.max_steps}")
+        logger.info(f"[Episode {episode_num+1}] Step {step+1}/{config.max_steps}")
         
         # Get number of zones
         n_zones = zone_count_from_obs(obs)
@@ -462,32 +466,125 @@ def run_rollout(config: RolloutConfig) -> List[Dict]:
         
         # Check if done
         if done:
-            logger.info(f"Episode ended at step {step+1}")
+            logger.info(f"[Episode {episode_num+1}] Episode ended at step {step+1}")
             break
-    
-    # Save final results
-    try:
-        with open(config.save_path, "w", encoding="utf-8") as f:
-            json.dump(logs, f, ensure_ascii=False, indent=2)
-        logger.info(f"Saved final rollout: {config.save_path}")
-    except Exception as e:
-        logger.error(f"Failed to save final rollout: {e}")
-    
-    # Print summary
+
+    # Print episode summary
     if logs:
         rewards = [log["reward"] for log in logs]
-        logger.info(f"\nRollout Summary:")
+        logger.info(f"\n[Episode {episode_num+1}] Summary:")
         logger.info(f"  Total steps: {len(logs)}")
         logger.info(f"  Mean reward: {np.mean(rewards):.2f}")
-        logger.info(f"  Std reward: {np.std(rewards):.2f}")
-        logger.info(f"  Min reward: {np.min(rewards):.2f}")
-        logger.info(f"  Max reward: {np.max(rewards):.2f}")
         logger.info(f"  Total reward: {np.sum(rewards):.2f}")
 
-        # 绘制 Rollout 结果图表
-        plot_rollout_results(logs, config.save_path)
-
     return logs
+
+
+def run_rollout(config: RolloutConfig) -> List[Dict]:
+    """
+    Run multiple episodes of LLM rollout and merge results.
+
+    Args:
+        config: Rollout configuration
+
+    Returns:
+        Merged list of log entries from all episodes
+    """
+    num_episodes = config.num_episodes
+    logger.info(f"\n{'='*60}")
+    logger.info(f"Starting Multi-Episode LLM Rollout")
+    logger.info(f"{'='*60}")
+    logger.info(f"Episodes: {num_episodes}")
+    logger.info(f"Steps per episode: {config.max_steps}")
+    logger.info(f"Total expected steps: {num_episodes * config.max_steps}")
+    logger.info(f"{'='*60}\n")
+
+    all_logs = []
+    episode_stats = []
+
+    for episode_idx in range(num_episodes):
+        logger.info(f"\n{'='*60}")
+        logger.info(f"Episode {episode_idx + 1}/{num_episodes}")
+        logger.info(f"{'='*60}\n")
+
+        try:
+            # Run single episode
+            episode_logs = run_single_episode(config, episode_num=episode_idx)
+
+            # Add episode number to each log entry
+            for log_entry in episode_logs:
+                log_entry["episode"] = episode_idx
+
+            # Collect stats
+            if episode_logs:
+                rewards = [log["reward"] for log in episode_logs]
+                episode_stats.append({
+                    "episode": episode_idx,
+                    "steps": len(episode_logs),
+                    "mean_reward": np.mean(rewards),
+                    "total_reward": np.sum(rewards),
+                    "min_reward": np.min(rewards),
+                    "max_reward": np.max(rewards)
+                })
+
+            # Merge logs
+            all_logs.extend(episode_logs)
+
+            logger.info(f"\n✅ Episode {episode_idx + 1} completed: {len(episode_logs)} steps")
+
+        except Exception as e:
+            logger.error(f"❌ Episode {episode_idx + 1} failed: {e}")
+            import traceback
+            traceback.print_exc()
+            # Continue with next episode
+
+    # Save merged results
+    logger.info(f"\n{'='*60}")
+    logger.info(f"All Episodes Completed")
+    logger.info(f"{'='*60}\n")
+
+    if all_logs:
+        # Save merged trajectory
+        try:
+            os.makedirs(os.path.dirname(config.save_path) or ".", exist_ok=True)
+            with open(config.save_path, "w", encoding="utf-8") as f:
+                json.dump(all_logs, f, ensure_ascii=False, indent=2)
+            logger.info(f"💾 Saved merged rollout: {config.save_path}")
+        except Exception as e:
+            logger.error(f"Failed to save merged rollout: {e}")
+
+        # Print overall summary
+        all_rewards = [log["reward"] for log in all_logs]
+        logger.info(f"\n📊 Overall Rollout Summary:")
+        logger.info(f"  Total episodes: {num_episodes}")
+        logger.info(f"  Total steps: {len(all_logs):,}")
+        logger.info(f"  Mean reward: {np.mean(all_rewards):.4f}")
+        logger.info(f"  Std reward: {np.std(all_rewards):.4f}")
+        logger.info(f"  Min reward: {np.min(all_rewards):.4f}")
+        logger.info(f"  Max reward: {np.max(all_rewards):.4f}")
+        logger.info(f"  Total reward: {np.sum(all_rewards):.4f}")
+
+        # Print per-episode stats
+        if episode_stats:
+            logger.info(f"\n📈 Per-Episode Statistics:")
+            for stats in episode_stats:
+                logger.info(
+                    f"  Episode {stats['episode']+1}: "
+                    f"{stats['steps']} steps, "
+                    f"mean={stats['mean_reward']:.2f}, "
+                    f"total={stats['total_reward']:.2f}"
+                )
+
+        # Plot results
+        try:
+            plot_rollout_results(all_logs, config.save_path)
+        except Exception as e:
+            logger.warning(f"Failed to plot results: {e}")
+
+    else:
+        logger.warning("No logs collected from any episode!")
+
+    return all_logs
 
 
 # ============================================================================

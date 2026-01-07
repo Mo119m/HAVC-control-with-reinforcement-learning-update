@@ -68,6 +68,8 @@ class PipelineConfig:
     temperature: float = 0.7
     k_fewshot: int = 3
     fewshot_alpha: float = 0.6
+    llm_rollout_episodes: int = 1  # Number of episodes to run
+    llm_rollout_max_steps: int = 200  # Steps per episode
     
     # Fine-tuning
     finetune_epochs: int = 4
@@ -361,17 +363,25 @@ class Pipeline:
             "LOCATION": self.config.location,
             "FEWSHOT_JSON": str(self.paths["fewshot_json"]),
             "SAVE_PATH": str(self.paths["llm_rollout_trajectory"]),
-            "MAX_STEPS": "200",
+            "MAX_STEPS": str(self.config.llm_rollout_max_steps),
+            "NUM_EPISODES": str(self.config.llm_rollout_episodes),
             "K_FEWSHOT": str(self.config.k_fewshot),
             "FEWSHOT_ALPHA": str(self.config.fewshot_alpha),
             "MODEL_NAME": self.config.model_name,
         }
 
         logger.info(f"Running LLM rollout with model: {self.config.model_name}")
+        logger.info(f"Episodes: {self.config.llm_rollout_episodes} × {self.config.llm_rollout_max_steps} steps")
+        logger.info(f"Total expected steps: {self.config.llm_rollout_episodes * self.config.llm_rollout_max_steps}")
         logger.info(f"Few-shot examples: {self.paths['fewshot_json']}")
         logger.info(f"Output: {self.paths['llm_rollout_trajectory']}")
 
         try:
+            # Calculate timeout based on number of episodes (assume ~5 min per episode + overhead)
+            timeout_per_episode = 600  # 10 minutes per episode (conservative estimate)
+            timeout = max(7200, self.config.llm_rollout_episodes * timeout_per_episode)
+            logger.info(f"Timeout set to {timeout//60} minutes for {self.config.llm_rollout_episodes} episodes")
+
             # Run with real-time output streaming
             result = subprocess.run(
                 ["python", "core_modules/rollout_fewshot_version.py"],
@@ -379,7 +389,7 @@ class Pipeline:
                 check=True,
                 stdout=None,
                 stderr=None,
-                timeout=7200  # 2 hours timeout
+                timeout=timeout
             )
 
             logger.info("LLM rollout completed")
