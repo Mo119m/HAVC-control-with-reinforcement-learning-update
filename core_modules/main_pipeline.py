@@ -115,7 +115,9 @@ class PipelineConfig:
         """Load config from JSON"""
         with open(path, "r") as f:
             data = json.load(f)
-        return cls(**data)
+        # Filter out comment fields (keys starting with '_comment')
+        filtered_data = {k: v for k, v in data.items() if not k.startswith('_comment')}
+        return cls(**filtered_data)
 
 
 class Pipeline:
@@ -369,6 +371,12 @@ class Pipeline:
             "FEWSHOT_ALPHA": str(self.config.fewshot_alpha),
             "MODEL_NAME": self.config.model_name,
         }
+
+        # Add Drive backup path if enabled (for real-time backup during rollout)
+        if self.drive_backup.enabled:
+            drive_rollout_backup = self.drive_backup.drive_path / self.config.llm_rollout_dir
+            env["DRIVE_BACKUP_PATH"] = str(drive_rollout_backup)
+            logger.info(f"Real-time Drive backup enabled: {drive_rollout_backup}")
 
         logger.info(f"Running LLM rollout with model: {self.config.model_name}")
         logger.info(f"Episodes: {self.config.llm_rollout_episodes} × {self.config.llm_rollout_max_steps} steps")

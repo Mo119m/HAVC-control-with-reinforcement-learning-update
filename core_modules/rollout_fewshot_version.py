@@ -499,10 +499,37 @@ def run_rollout(config: RolloutConfig) -> List[Dict]:
     logger.info(f"Total expected steps: {num_episodes * config.max_steps}")
     logger.info(f"{'='*60}\n")
 
+    # Check for Drive backup path
+    drive_backup_path = os.getenv("DRIVE_BACKUP_PATH")
+    if drive_backup_path:
+        logger.info(f"💾 Drive backup enabled: {drive_backup_path}")
+        os.makedirs(drive_backup_path, exist_ok=True)
+
+    # Try to load existing progress
     all_logs = []
     episode_stats = []
+    completed_episodes = set()
+
+    # Check if there's existing data to resume from
+    if os.path.exists(config.save_path):
+        try:
+            with open(config.save_path, 'r') as f:
+                existing_data = json.load(f)
+            if isinstance(existing_data, list) and len(existing_data) > 0:
+                all_logs = existing_data
+                completed_episodes = set(entry.get('episode', 0) for entry in existing_data)
+                logger.info(f"📂 Resuming from existing data:")
+                logger.info(f"   - Loaded {len(all_logs)} steps")
+                logger.info(f"   - Completed episodes: {sorted(completed_episodes)}")
+        except Exception as e:
+            logger.warning(f"Failed to load existing data: {e}")
 
     for episode_idx in range(num_episodes):
+        # Skip if already completed
+        if episode_idx in completed_episodes:
+            logger.info(f"\n⏭️  Episode {episode_idx + 1} already completed, skipping...")
+            continue
+
         logger.info(f"\n{'='*60}")
         logger.info(f"Episode {episode_idx + 1}/{num_episodes}")
         logger.info(f"{'='*60}\n")
@@ -529,13 +556,59 @@ def run_rollout(config: RolloutConfig) -> List[Dict]:
 
             # Merge logs
             all_logs.extend(episode_logs)
+            completed_episodes.add(episode_idx)
 
             logger.info(f"\n✅ Episode {episode_idx + 1} completed: {len(episode_logs)} steps")
+
+            # IMMEDIATELY save to local after each episode
+            try:
+                os.makedirs(os.path.dirname(config.save_path) or ".", exist_ok=True)
+                with open(config.save_path, "w", encoding="utf-8") as f:
+                    json.dump(all_logs, f, ensure_ascii=False, indent=2)
+                logger.info(f"💾 Saved to local: {config.save_path}")
+            except Exception as e:
+                logger.error(f"Failed to save locally: {e}")
+
+            # IMMEDIATELY backup to Drive after each episode
+            if drive_backup_path:
+                try:
+                    import shutil
+                    drive_file = os.path.join(drive_backup_path, "llm_rollout.json")
+                    shutil.copy2(config.save_path, drive_file)
+
+                    # Also save episode-specific backup
+                    drive_episode_file = os.path.join(
+                        drive_backup_path,
+                        f"llm_rollout_ep{episode_idx+1}.json"
+                    )
+                    with open(drive_episode_file, "w", encoding="utf-8") as f:
+                        json.dump(episode_logs, f, ensure_ascii=False, indent=2)
+
+                    logger.info(f"☁️  Backed up to Drive: {drive_file}")
+                    logger.info(f"☁️  Episode backup: {drive_episode_file}")
+                except Exception as e:
+                    logger.error(f"Failed to backup to Drive: {e}")
 
         except Exception as e:
             logger.error(f"❌ Episode {episode_idx + 1} failed: {e}")
             import traceback
             traceback.print_exc()
+
+            # Save current progress even on failure
+            if all_logs:
+                try:
+                    with open(config.save_path, "w", encoding="utf-8") as f:
+                        json.dump(all_logs, f, ensure_ascii=False, indent=2)
+                    logger.info(f"💾 Saved progress before failure")
+
+                    if drive_backup_path:
+                        import shutil
+                        drive_file = os.path.join(drive_backup_path, "llm_rollout.json")
+                        shutil.copy2(config.save_path, drive_file)
+                        logger.info(f"☁️  Backed up to Drive before failure")
+                except:
+                    pass
+
             # Continue with next episode
 
     # Save merged results
