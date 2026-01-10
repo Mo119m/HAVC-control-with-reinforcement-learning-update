@@ -372,6 +372,12 @@ class Pipeline:
             "MODEL_NAME": self.config.model_name,
         }
 
+        # Add Drive backup path if enabled (for real-time backup during rollout)
+        if self.drive_backup.enabled:
+            drive_rollout_backup = self.drive_backup.drive_path / self.config.llm_rollout_dir
+            env["DRIVE_BACKUP_PATH"] = str(drive_rollout_backup)
+            logger.info(f"Real-time Drive backup enabled: {drive_rollout_backup}")
+
         logger.info(f"Running LLM rollout with model: {self.config.model_name}")
         logger.info(f"Episodes: {self.config.llm_rollout_episodes} × {self.config.llm_rollout_max_steps} steps")
         logger.info(f"Total expected steps: {self.config.llm_rollout_episodes * self.config.llm_rollout_max_steps}")
