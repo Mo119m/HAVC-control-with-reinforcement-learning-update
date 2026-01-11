@@ -1,16 +1,26 @@
 """
 7B LoRA Fine-tuning with PPO - Fixed Version
 
-FIXES:
+IMPORTANT: This is OFFLINE RL training, not online PPO
+- We load pre-collected LLM rollout data (fixed dataset)
+- Train for multiple epochs on this static dataset
+- old_lp is recomputed at each epoch start (not resampling data)
+- This violates strict on-policy assumption but is common in practice
+- Similar to offline RL / behavior cloning with PPO-style objectives
+
+FIXES (from original version):
 1. Fixed importance sampling ratio computation
 2. old_lp computed at epoch start and frozen during epoch
 3. Proper PPO clipping mechanism
 4. Better error handling and logging
+5. Use sum of logprobs (not average) for correct probability ratios
+6. Preserve natural episode boundaries (done flags) for correct GAE
 
-Key Changes:
+Key Implementation:
 - old_lp_vec computed ONCE per epoch and kept constant
-- ratio = exp(new_lp - old_lp) where old_lp is from epoch start
-- Added validation and checkpointing
+- ratio = exp(sum(new_lp) - sum(old_lp)) = product of token probabilities
+- GAE respects episode boundaries via done flags
+- Self-distillation: filter to 5%-99% reward quantiles
 """
 
 import os
@@ -63,7 +73,7 @@ class FineTuneConfig:
     base_model: str = "Qwen/Qwen2.5-7B-Instruct"
     
     # Training
-    epochs: int = 4
+    epochs: int = 4  # Multiple epochs on offline data (not on-policy resampling)
     lr: float = 1e-5
     batch_size: int = 1
     grad_accum: int = 8
@@ -262,11 +272,10 @@ def load_clean_rollouts(paths: List[str]) -> List[Dict]:
         
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        
-        # Mark last entry as done
-        if data:
-            data[-1]["done"] = True
-        
+
+        # Use natural episode boundaries (each episode ends with done=True from rollout)
+        # This preserves correct GAE computation across episode boundaries
+
         for entry in data:
             if not is_clean_entry(entry):
                 continue
@@ -423,40 +432,48 @@ def masked_token_stats(
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Compute log probs and entropy for valid tokens only.
-    
+
+    IMPORTANT: Returns sequence-level sum of logprobs (not average) for proper PPO.
+    This ensures that exp(new_lp - old_lp) correctly computes the probability ratio.
+
     Returns:
-        Tuple of (log_probs_per_sample, entropy_per_sample, n_tokens_per_sample)
+        Tuple of (log_probs_per_sample_SUM, entropy_per_sample_MEAN, n_tokens_per_sample)
     """
     # Shift for autoregressive
     shift_logits = logits[:, :-1, :].contiguous()
     shift_labels = labels[:, 1:].contiguous()
     shift_mask = attention_mask[:, 1:].contiguous()
-    
+
     # Valid token mask
     valid_mask = (shift_labels != -100) & (shift_mask != 0)
-    
+
     # Compute log probs
     log_probs = F.log_softmax(shift_logits, dim=-1)
-    
+
     # Gather log probs for actual tokens
     lp_tok = torch.gather(
         log_probs,
         dim=-1,
         index=shift_labels.unsqueeze(-1).clamp(min=0)
     ).squeeze(-1)
-    
+
     # Mask invalid
     lp_tok = lp_tok * valid_mask.float()
-    
+
     # Entropy
     probs = torch.exp(log_probs)
     ent_tok = -(probs * log_probs).sum(dim=-1) * valid_mask.float()
-    
-    # Per-sample averages
+
+    # Count tokens
     n_tokens = valid_mask.float().sum(dim=1).clamp(min=1)
-    lp_per_sample = lp_tok.sum(dim=1) / n_tokens
+
+    # FIXED: Use sum for logprobs (for proper PPO ratio computation)
+    # ratio = exp(sum(new_lp) - sum(old_lp)) = prod(new_p) / prod(old_p)
+    lp_per_sample = lp_tok.sum(dim=1)  # SUM not average!
+
+    # Entropy can still use average (for monitoring only)
     ent_per_sample = ent_tok.sum(dim=1) / n_tokens
-    
+
     return lp_per_sample, ent_per_sample, n_tokens
 
 
