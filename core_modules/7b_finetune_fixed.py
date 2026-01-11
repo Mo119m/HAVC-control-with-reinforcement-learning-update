@@ -14,6 +14,7 @@ Key Changes:
 """
 
 import os
+import sys
 import glob
 import json
 import time
@@ -38,7 +39,17 @@ except ImportError:
     PEFT_AVAILABLE = False
     print("Warning: peft not available, LoRA disabled")
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler()
+    ]
+)
+# Force immediate flush for real-time output
+for handler in logging.root.handlers:
+    handler.flush = lambda: handler.stream.flush() if hasattr(handler, 'stream') else None
+
 logger = logging.getLogger(__name__)
 
 
@@ -655,6 +666,7 @@ def main():
         
         # CRITICAL: Re-compute old policy at epoch start and FREEZE it
         logger.info("Re-computing old policy for this epoch...")
+        sys.stdout.flush()
         
         with torch.no_grad():
             all_values, all_old_lp = [], []
@@ -769,6 +781,18 @@ def main():
                 )
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
+
+                # Log progress every gradient step
+                step_num = micro_steps // config.grad_accum
+                total_steps = (len(train_loader) + config.grad_accum - 1) // config.grad_accum
+                avg_loss = total_loss / micro_steps
+                logger.info(
+                    f"  Step {step_num}/{total_steps} | "
+                    f"Loss: {avg_loss:.4f} | "
+                    f"Policy: {total_pl/micro_steps:.4f} | "
+                    f"Value: {total_vl/micro_steps:.4f}"
+                )
+                sys.stdout.flush()  # Force immediate output
         
         # Epoch stats
         n_batches = len(train_loader)
