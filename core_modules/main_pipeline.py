@@ -117,6 +117,12 @@ class PipelineConfig:
             data = json.load(f)
         # Filter out comment fields (keys starting with '_comment')
         filtered_data = {k: v for k, v in data.items() if not k.startswith('_comment')}
+
+        # Filter out fields not in dataclass (for progressive training config)
+        # Get valid field names from dataclass
+        valid_fields = {field.name for field in cls.__dataclass_fields__.values()}
+        filtered_data = {k: v for k, v in filtered_data.items() if k in valid_fields}
+
         return cls(**filtered_data)
 
 
