@@ -236,6 +236,7 @@ class Pipeline:
 
         env = {
             **os.environ,
+            "PYTHONUNBUFFERED": "1",  # Disable output buffering for real-time logs
             "BUILDING": self.config.building,
             "WEATHER": self.config.weather,
             "LOCATION": self.config.location,
@@ -306,11 +307,13 @@ class Pipeline:
             "--climate", self.config.weather,
             "--location", self.config.location,
         ]
-        
+
         try:
             # Run with real-time output streaming
+            env = {**os.environ, "PYTHONUNBUFFERED": "1"}
             result = subprocess.run(
                 cmd,
+                env=env,
                 check=True,
                 stdout=None,
                 stderr=None
@@ -360,6 +363,7 @@ class Pipeline:
         # Set environment variables for rollout script
         env = {
             **os.environ,
+            "PYTHONUNBUFFERED": "1",  # Disable output buffering for real-time logs
             "BUILDING": self.config.building,
             "CLIMATE": self.config.weather,
             "LOCATION": self.config.location,
@@ -447,6 +451,7 @@ class Pipeline:
         
         env = {
             **os.environ,
+            "PYTHONUNBUFFERED": "1",  # Disable output buffering for real-time logs
             "BASE_MODEL": self.config.model_name,
             "ROLLOUT_GLOBS": str(self.paths["llm_rollout_trajectory"]),
             "SAVE_DIR": str(Path(self.config.base_dir) / self.config.finetune_dir),
@@ -520,11 +525,13 @@ class Pipeline:
             "--output", str(self.paths["eval_plots"]),
             "--smooth", "5",
         ]
-        
+
         try:
             # Run with real-time output streaming
+            env = {**os.environ, "PYTHONUNBUFFERED": "1"}
             result = subprocess.run(
                 cmd,
+                env=env,
                 check=True,
                 stdout=None,
                 stderr=None
