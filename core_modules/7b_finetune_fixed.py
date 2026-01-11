@@ -689,7 +689,8 @@ def main():
 
     # CRITICAL: Pre-compute old policy ONCE at start
     logger.info("Pre-computing initial old policy...")
-    
+    sys.stdout.flush()  # Force immediate output
+
     with torch.no_grad():
         all_values, all_old_lp, all_rewards, all_dones = [], [], [], []
         
@@ -721,6 +722,7 @@ def main():
         dones_vec = torch.cat(all_dones, dim=0)
     
     logger.info(f"Pre-computed old policy: {len(old_lp_vec)} samples")
+    sys.stdout.flush()
     
     # Build index mapping
     index_loader = DataLoader(
