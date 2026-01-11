@@ -1,19 +1,30 @@
 """
 7B LoRA Fine-tuning with PPO - Fixed Version
 
-FIXES:
+IMPORTANT: This is OFFLINE RL training, not online PPO
+- We load pre-collected LLM rollout data (fixed dataset)
+- Train for multiple epochs on this static dataset
+- old_lp is recomputed at each epoch start (not resampling data)
+- This violates strict on-policy assumption but is common in practice
+- Similar to offline RL / behavior cloning with PPO-style objectives
+
+FIXES (from original version):
 1. Fixed importance sampling ratio computation
 2. old_lp computed at epoch start and frozen during epoch
 3. Proper PPO clipping mechanism
 4. Better error handling and logging
+5. Use sum of logprobs (not average) for correct probability ratios
+6. Preserve natural episode boundaries (done flags) for correct GAE
 
-Key Changes:
+Key Implementation:
 - old_lp_vec computed ONCE per epoch and kept constant
-- ratio = exp(new_lp - old_lp) where old_lp is from epoch start
-- Added validation and checkpointing
+- ratio = exp(sum(new_lp) - sum(old_lp)) = product of token probabilities
+- GAE respects episode boundaries via done flags
+- Self-distillation: filter to 5%-99% reward quantiles
 """
 
 import os
+import sys
 import glob
 import json
 import time
@@ -38,7 +49,17 @@ except ImportError:
     PEFT_AVAILABLE = False
     print("Warning: peft not available, LoRA disabled")
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler()
+    ]
+)
+# Force immediate flush for real-time output
+for handler in logging.root.handlers:
+    handler.flush = lambda: handler.stream.flush() if hasattr(handler, 'stream') else None
+
 logger = logging.getLogger(__name__)
 
 
@@ -52,7 +73,7 @@ class FineTuneConfig:
     base_model: str = "Qwen/Qwen2.5-7B-Instruct"
     
     # Training
-    epochs: int = 4
+    epochs: int = 4  # Multiple epochs on offline data (not on-policy resampling)
     lr: float = 1e-5
     batch_size: int = 1
     grad_accum: int = 8
@@ -75,11 +96,16 @@ class FineTuneConfig:
     # Data
     reward_q_low: float = 0.05
     reward_q_high: float = 0.99
-    
+
+    # Progressive On-policy Training
+    use_progressive_onpolicy: bool = False
+    refresh_schedule: List[Dict] = None  # Will be set from config
+    initial_clip_eps: float = 0.20
+
     # Paths
     rollout_globs: str = "runs/ppo_trajectory.json"
     save_dir: str = "./ft_out_ppo_7b_lora"
-    
+
     # System
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     
@@ -95,11 +121,24 @@ class FineTuneConfig:
         self.base_model = os.getenv("BASE_MODEL", self.base_model)
         self.rollout_globs = os.getenv("ROLLOUT_GLOBS", self.rollout_globs)
         self.save_dir = os.getenv("SAVE_DIR", self.save_dir)
-        
+
         if os.getenv("EPOCHS"):
             self.epochs = int(os.getenv("EPOCHS"))
         if os.getenv("LR"):
             self.lr = float(os.getenv("LR"))
+
+        # Load progressive on-policy config
+        if os.getenv("USE_PROGRESSIVE_ONPOLICY"):
+            self.use_progressive_onpolicy = os.getenv("USE_PROGRESSIVE_ONPOLICY").lower() == "true"
+        if os.getenv("REFRESH_SCHEDULE"):
+            self.refresh_schedule = json.loads(os.getenv("REFRESH_SCHEDULE"))
+        if os.getenv("INITIAL_CLIP_EPS"):
+            self.initial_clip_eps = float(os.getenv("INITIAL_CLIP_EPS"))
+            self.clip_eps = self.initial_clip_eps
+
+        # Allow dynamic clip override (for progressive training)
+        if os.getenv("CLIP_EPS"):
+            self.clip_eps = float(os.getenv("CLIP_EPS"))
 
 
 def plot_finetune_results(history: Dict[str, List], save_dir: str):
@@ -251,11 +290,10 @@ def load_clean_rollouts(paths: List[str]) -> List[Dict]:
         
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        
-        # Mark last entry as done
-        if data:
-            data[-1]["done"] = True
-        
+
+        # Use natural episode boundaries (each episode ends with done=True from rollout)
+        # This preserves correct GAE computation across episode boundaries
+
         for entry in data:
             if not is_clean_entry(entry):
                 continue
@@ -271,15 +309,67 @@ def load_clean_rollouts(paths: List[str]) -> List[Dict]:
             # Format answer
             answer = json.dumps(action_unit, ensure_ascii=False)
             
+            # Track episode info for potential data weighting
+            episode_num = entry.get("episode", 0)
+
             all_samples.append({
                 "prompt": prompt,
                 "answer": answer,
                 "reward": float(reward),
-                "done": bool(done)
+                "done": bool(done),
+                "episode": episode_num,
+                "source_file": path
             })
     
     logger.info(f"Loaded {len(all_samples)} clean samples")
     return all_samples
+
+
+def filter_and_weight_samples(
+    samples: List[Dict],
+    keep_episodes: int = None,
+    new_episode_weight: float = 1.0
+) -> Tuple[List[Dict], List[float]]:
+    """
+    Filter samples to keep only recent episodes and assign weights.
+
+    Args:
+        samples: List of training samples
+        keep_episodes: If set, only keep the last N episodes
+        new_episode_weight: Weight multiplier for newer episodes
+
+    Returns:
+        (filtered_samples, sample_weights)
+    """
+    if keep_episodes is None:
+        # No filtering, equal weights
+        return samples, [1.0] * len(samples)
+
+    # Get unique episodes sorted by episode number
+    episodes = sorted(set(s["episode"] for s in samples))
+
+    if len(episodes) <= keep_episodes:
+        # Have fewer episodes than requested, keep all with equal weight
+        return samples, [1.0] * len(samples)
+
+    # Keep only the last N episodes
+    keep_episode_set = set(episodes[-keep_episodes:])
+
+    filtered = []
+    weights = []
+    for sample in samples:
+        if sample["episode"] in keep_episode_set:
+            filtered.append(sample)
+            # Newer episodes (higher episode number) get higher weight
+            if sample["episode"] in episodes[-keep_episodes//2:]:
+                weights.append(new_episode_weight)
+            else:
+                weights.append(1.0)
+
+    logger.info(f"Filtered to {len(filtered)} samples from last {keep_episodes} episodes")
+    logger.info(f"Applied {new_episode_weight}x weight to newest {keep_episodes//2} episodes")
+
+    return filtered, weights
 
 
 class RolloutDataset(Dataset):
@@ -412,40 +502,48 @@ def masked_token_stats(
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Compute log probs and entropy for valid tokens only.
-    
+
+    IMPORTANT: Returns sequence-level sum of logprobs (not average) for proper PPO.
+    This ensures that exp(new_lp - old_lp) correctly computes the probability ratio.
+
     Returns:
-        Tuple of (log_probs_per_sample, entropy_per_sample, n_tokens_per_sample)
+        Tuple of (log_probs_per_sample_SUM, entropy_per_sample_MEAN, n_tokens_per_sample)
     """
     # Shift for autoregressive
     shift_logits = logits[:, :-1, :].contiguous()
     shift_labels = labels[:, 1:].contiguous()
     shift_mask = attention_mask[:, 1:].contiguous()
-    
+
     # Valid token mask
     valid_mask = (shift_labels != -100) & (shift_mask != 0)
-    
+
     # Compute log probs
     log_probs = F.log_softmax(shift_logits, dim=-1)
-    
+
     # Gather log probs for actual tokens
     lp_tok = torch.gather(
         log_probs,
         dim=-1,
         index=shift_labels.unsqueeze(-1).clamp(min=0)
     ).squeeze(-1)
-    
+
     # Mask invalid
     lp_tok = lp_tok * valid_mask.float()
-    
+
     # Entropy
     probs = torch.exp(log_probs)
     ent_tok = -(probs * log_probs).sum(dim=-1) * valid_mask.float()
-    
-    # Per-sample averages
+
+    # Count tokens
     n_tokens = valid_mask.float().sum(dim=1).clamp(min=1)
-    lp_per_sample = lp_tok.sum(dim=1) / n_tokens
+
+    # FIXED: Use sum for logprobs (for proper PPO ratio computation)
+    # ratio = exp(sum(new_lp) - sum(old_lp)) = prod(new_p) / prod(old_p)
+    lp_per_sample = lp_tok.sum(dim=1)  # SUM not average!
+
+    # Entropy can still use average (for monitoring only)
     ent_per_sample = ent_tok.sum(dim=1) / n_tokens
-    
+
     return lp_per_sample, ent_per_sample, n_tokens
 
 
@@ -655,6 +753,7 @@ def main():
         
         # CRITICAL: Re-compute old policy at epoch start and FREEZE it
         logger.info("Re-computing old policy for this epoch...")
+        sys.stdout.flush()
         
         with torch.no_grad():
             all_values, all_old_lp = [], []
@@ -769,6 +868,18 @@ def main():
                 )
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
+
+                # Log progress every gradient step
+                step_num = micro_steps // config.grad_accum
+                total_steps = (len(train_loader) + config.grad_accum - 1) // config.grad_accum
+                avg_loss = total_loss / micro_steps
+                logger.info(
+                    f"  Step {step_num}/{total_steps} | "
+                    f"Loss: {avg_loss:.4f} | "
+                    f"Policy: {total_pl/micro_steps:.4f} | "
+                    f"Value: {total_vl/micro_steps:.4f}"
+                )
+                sys.stdout.flush()  # Force immediate output
         
         # Epoch stats
         n_batches = len(train_loader)

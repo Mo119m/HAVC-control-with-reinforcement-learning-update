@@ -117,6 +117,12 @@ class PipelineConfig:
             data = json.load(f)
         # Filter out comment fields (keys starting with '_comment')
         filtered_data = {k: v for k, v in data.items() if not k.startswith('_comment')}
+
+        # Filter out fields not in dataclass (for progressive training config)
+        # Get valid field names from dataclass
+        valid_fields = {field.name for field in cls.__dataclass_fields__.values()}
+        filtered_data = {k: v for k, v in filtered_data.items() if k in valid_fields}
+
         return cls(**filtered_data)
 
 
@@ -348,11 +354,25 @@ class Pipeline:
         stage_name = self.config.llm_rollout_dir
         stage_path = str(Path(self.config.base_dir) / stage_name)
 
-        # Try to restore from backup
-        if self._try_restore_stage(stage_name, stage_path):
-            if self.paths["llm_rollout_trajectory"].exists():
-                logger.info("✅ LLM rollout restored from backup, skipping rollout")
-                return True
+        # Try to restore from backup (but don't skip - let rollout script handle resume)
+        self._try_restore_stage(stage_name, stage_path)
+
+        # Check if already completed ALL episodes
+        if self.paths["llm_rollout_trajectory"].exists():
+            try:
+                import json
+                with open(self.paths["llm_rollout_trajectory"], 'r') as f:
+                    data = json.load(f)
+                if isinstance(data, list) and len(data) > 0:
+                    completed_episodes = set(entry.get('episode', 0) for entry in data)
+                    if len(completed_episodes) >= self.config.llm_rollout_episodes:
+                        logger.info(f"✅ LLM rollout already completed: {len(completed_episodes)}/{self.config.llm_rollout_episodes} episodes")
+                        return True
+                    else:
+                        logger.info(f"📂 Found partial progress: {len(completed_episodes)}/{self.config.llm_rollout_episodes} episodes")
+                        logger.info(f"   Will resume from episode {len(completed_episodes) + 1}")
+            except Exception as e:
+                logger.warning(f"Failed to check progress: {e}")
 
         logger.info("Starting LLM rollout...")
 
