@@ -389,19 +389,13 @@ class Pipeline:
         logger.info(f"Output: {self.paths['llm_rollout_trajectory']}")
 
         try:
-            # Calculate timeout based on number of episodes (assume ~5 min per episode + overhead)
-            timeout_per_episode = 600  # 10 minutes per episode (conservative estimate)
-            timeout = max(7200, self.config.llm_rollout_episodes * timeout_per_episode)
-            logger.info(f"Timeout set to {timeout//60} minutes for {self.config.llm_rollout_episodes} episodes")
-
-            # Run with real-time output streaming
+            # Run with real-time output streaming (no timeout - we have episode-level backups)
             result = subprocess.run(
                 ["python", "core_modules/rollout_fewshot_version.py"],
                 env=env,
                 check=True,
                 stdout=None,
-                stderr=None,
-                timeout=timeout
+                stderr=None
             )
 
             logger.info("LLM rollout completed")
@@ -426,9 +420,6 @@ class Pipeline:
 
         except subprocess.CalledProcessError as e:
             logger.error(f"LLM rollout failed: {e}")
-            return False
-        except subprocess.TimeoutExpired:
-            logger.error("LLM rollout timed out")
             return False
     
     def _run_finetuning(self) -> bool:
@@ -460,14 +451,13 @@ class Pipeline:
         }
         
         try:
-            # Run with real-time output streaming
+            # Run with real-time output streaming (no timeout)
             result = subprocess.run(
                 ["python", "core_modules/7b_finetune_fixed.py"],
                 env=env,
                 check=True,
                 stdout=None,
-                stderr=None,
-                timeout=7200  # 2 hours timeout
+                stderr=None
             )
 
             logger.info("Fine-tuning completed")
@@ -487,9 +477,6 @@ class Pipeline:
 
         except subprocess.CalledProcessError as e:
             logger.error(f"Fine-tuning failed: {e}")
-            return False
-        except subprocess.TimeoutExpired:
-            logger.error("Fine-tuning timed out")
             return False
     
     def _run_evaluation(self) -> bool:
