@@ -619,31 +619,54 @@ def main():
     tokenizer.padding_side = "right"
     
     # Load data
+    logger.info("="*60)
+    logger.info("STAGE 1: Loading training data")
+    logger.info("="*60)
+    sys.stdout.flush()
+
     paths = glob.glob(config.rollout_globs)
     if not paths:
         raise ValueError(f"No files found: {config.rollout_globs}")
-    
+
+    logger.info(f"Found {len(paths)} rollout files")
+    logger.info("Loading and cleaning rollout data...")
+    sys.stdout.flush()
+
     samples = load_clean_rollouts(paths)
-    
+
     if not samples:
         raise ValueError("No valid samples found")
-    
+
+    logger.info(f"✓ Loaded {len(samples)} total samples")
+    sys.stdout.flush()
+
     # Reward clipping
+    logger.info("Applying self-distillation (reward filtering)...")
+    sys.stdout.flush()
+
     rewards_all = torch.tensor([s["reward"] for s in samples])
     q_low = torch.quantile(rewards_all, config.reward_q_low)
     q_high = torch.quantile(rewards_all, config.reward_q_high)
-    
+
     samples_filtered = [
         s for s in samples
         if q_low <= s["reward"] <= q_high
     ]
-    
-    logger.info(f"Filtered to {len(samples_filtered)} samples (reward in [{q_low:.2f}, {q_high:.2f}])")
-    
+
+    logger.info(f"✓ Filtered to {len(samples_filtered)} samples (reward in [{q_low:.2f}, {q_high:.2f}])")
+    logger.info("Creating dataset...")
+    sys.stdout.flush()
+
     dataset = RolloutDataset(samples_filtered)
-    
+
+    logger.info(f"✓ Dataset created with {len(dataset)} samples")
+    sys.stdout.flush()
+
     # Load model
-    logger.info(f"Loading model: {config.base_model}")
+    logger.info("="*60)
+    logger.info("STAGE 2: Loading and preparing model")
+    logger.info("="*60)
+    logger.info(f"Base model: {config.base_model}")
     sys.stdout.flush()
 
     base = AutoModelForCausalLM.from_pretrained(
@@ -689,11 +712,18 @@ def main():
 
     # Create PPO model
     logger.info("Creating PPO model with value head...")
+    logger.info(f"Hidden size: {hidden_size}")
     sys.stdout.flush()
 
-    policy_model = PPOModel(base, hidden_size).to(device)
+    policy_model = PPOModel(base, hidden_size)
 
-    logger.info("✓ PPO model created successfully")
+    logger.info("✓ PPO model structure created")
+    logger.info(f"Moving model to device: {device} (this may take 1-2 minutes)...")
+    sys.stdout.flush()
+
+    policy_model = policy_model.to(device)
+
+    logger.info("✓ PPO model moved to device successfully")
     sys.stdout.flush()
 
     # Optimizer
@@ -706,13 +736,15 @@ def main():
     )
 
     logger.info("✓ Optimizer created successfully")
-    logger.info("="*60)
     sys.stdout.flush()
-    
 
     # CRITICAL: Pre-compute old policy ONCE at start
-    logger.info("Pre-computing initial old policy...")
-    sys.stdout.flush()  # Force immediate output
+    logger.info("="*60)
+    logger.info("STAGE 3: Pre-computing baseline policy")
+    logger.info("="*60)
+    logger.info("Computing initial log probabilities for all samples...")
+    logger.info("(This step is required for PPO algorithm)")
+    sys.stdout.flush()
 
     with torch.no_grad():
         all_values, all_old_lp, all_rewards, all_dones = [], [], [], []
@@ -772,6 +804,14 @@ def main():
     idx_to_pos = {idx: pos for pos, idx in enumerate(ordered_indices)}
 
     # Training Loop
+    logger.info("="*60)
+    logger.info("STAGE 4: PPO Training")
+    logger.info("="*60)
+    logger.info(f"Total epochs: {config.epochs}")
+    logger.info(f"Samples: {len(dataset)}, Batch size: {config.batch_size}")
+    logger.info(f"Gradient accumulation: {config.grad_accum}")
+    sys.stdout.flush()
+
     training_history = {
         'policy_loss': [],
         'value_loss': [],
