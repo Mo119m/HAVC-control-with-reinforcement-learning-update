@@ -619,31 +619,56 @@ def main():
     tokenizer.padding_side = "right"
     
     # Load data
+    logger.info("="*60)
+    logger.info("STAGE 1: Loading training data")
+    logger.info("="*60)
+    sys.stdout.flush()
+
     paths = glob.glob(config.rollout_globs)
     if not paths:
         raise ValueError(f"No files found: {config.rollout_globs}")
-    
+
+    logger.info(f"Found {len(paths)} rollout files")
+    logger.info("Loading and cleaning rollout data...")
+    sys.stdout.flush()
+
     samples = load_clean_rollouts(paths)
-    
+
     if not samples:
         raise ValueError("No valid samples found")
-    
+
+    logger.info(f"✓ Loaded {len(samples)} total samples")
+    sys.stdout.flush()
+
     # Reward clipping
+    logger.info("Applying self-distillation (reward filtering)...")
+    sys.stdout.flush()
+
     rewards_all = torch.tensor([s["reward"] for s in samples])
     q_low = torch.quantile(rewards_all, config.reward_q_low)
     q_high = torch.quantile(rewards_all, config.reward_q_high)
-    
+
     samples_filtered = [
         s for s in samples
         if q_low <= s["reward"] <= q_high
     ]
-    
-    logger.info(f"Filtered to {len(samples_filtered)} samples (reward in [{q_low:.2f}, {q_high:.2f}])")
-    
+
+    logger.info(f"✓ Filtered to {len(samples_filtered)} samples (reward in [{q_low:.2f}, {q_high:.2f}])")
+    logger.info("Creating dataset...")
+    sys.stdout.flush()
+
     dataset = RolloutDataset(samples_filtered)
-    
+
+    logger.info(f"✓ Dataset created with {len(dataset)} samples")
+    sys.stdout.flush()
+
     # Load model
-    logger.info(f"Loading model: {config.base_model}")
+    logger.info("="*60)
+    logger.info("STAGE 2: Loading and preparing model")
+    logger.info("="*60)
+    logger.info(f"Base model: {config.base_model}")
+    sys.stdout.flush()
+
     base = AutoModelForCausalLM.from_pretrained(
         config.base_model,
         trust_remote_code=True,
@@ -651,13 +676,18 @@ def main():
         device_map="auto",
         output_hidden_states=True
     )
-    
+
+    logger.info("✓ Base model loaded successfully")
+    sys.stdout.flush()
+
     base.config.use_cache = False
     base.gradient_checkpointing_enable()
-    
+
     # Add LoRA
     if PEFT_AVAILABLE:
-        logger.info("Adding LoRA adapters")
+        logger.info("Adding LoRA adapters...")
+        sys.stdout.flush()
+
         lora_config = LoraConfig(
             task_type="CAUSAL_LM",
             inference_mode=False,
@@ -671,56 +701,93 @@ def main():
             base.print_trainable_parameters()
         except:
             pass
-    
+
+        logger.info("✓ LoRA adapters added successfully")
+        sys.stdout.flush()
+
     # Get hidden size
     hidden_size = getattr(base.config, "hidden_size", None) or getattr(base.config, "n_embd", None)
     if hidden_size is None:
         raise ValueError("Cannot determine hidden_size from config")
-    
+
     # Create PPO model
-    policy_model = PPOModel(base, hidden_size).to(device)
-    
+    logger.info("Creating PPO model with value head...")
+    logger.info(f"Hidden size: {hidden_size}")
+    sys.stdout.flush()
+
+    policy_model = PPOModel(base, hidden_size)
+
+    logger.info("✓ PPO model structure created")
+    logger.info(f"Moving model to device: {device} (this may take 1-2 minutes)...")
+    sys.stdout.flush()
+
+    policy_model = policy_model.to(device)
+
+    logger.info("✓ PPO model moved to device successfully")
+    sys.stdout.flush()
+
     # Optimizer
+    logger.info("Creating optimizer...")
+    sys.stdout.flush()
+
     optimizer = AdamW(
         [p for p in policy_model.parameters() if p.requires_grad],
         lr=config.lr
     )
-    
+
+    logger.info("✓ Optimizer created successfully")
+    sys.stdout.flush()
 
     # CRITICAL: Pre-compute old policy ONCE at start
-    logger.info("Pre-computing initial old policy...")
-    
+    logger.info("="*60)
+    logger.info("STAGE 3: Pre-computing baseline policy")
+    logger.info("="*60)
+    logger.info("Computing initial log probabilities for all samples...")
+    logger.info("(This step is required for PPO algorithm)")
+    sys.stdout.flush()
+
     with torch.no_grad():
         all_values, all_old_lp, all_rewards, all_dones = [], [], [], []
-        
+
         value_loader = DataLoader(
             dataset,
             batch_size=config.batch_size,
             shuffle=False,
             collate_fn=lambda b: collate_chat(b, tokenizer, config.max_seq_len)
         )
-        
+
         policy_model.eval()
-        
-        for input_ids, attn_mask, labels, rewards, dones, _, _ in value_loader:
+
+        total_batches = len(value_loader)
+        logger.info(f"Total batches to process: {total_batches}")
+        sys.stdout.flush()
+
+        for batch_idx, (input_ids, attn_mask, labels, rewards, dones, _, _) in enumerate(value_loader):
             input_ids = input_ids.to(device)
             attn_mask = attn_mask.to(device)
             labels = labels.to(device)
-            
+
             logits, values = policy_model(input_ids, attn_mask)
             old_lp, _, _ = masked_token_stats(logits, labels, attn_mask, tokenizer)
-            
+
             all_values.append(values.float().detach().cpu())
             all_old_lp.append(old_lp.float().detach().cpu())
             all_rewards.append(rewards)
             all_dones.append(dones)
-        
+
+            # Show progress every 10 batches or at key milestones
+            if (batch_idx + 1) % 10 == 0 or (batch_idx + 1) == total_batches:
+                progress_pct = (batch_idx + 1) / total_batches * 100
+                logger.info(f"  Pre-compute progress: {batch_idx + 1}/{total_batches} batches ({progress_pct:.1f}%)")
+                sys.stdout.flush()
+
         values_vec = torch.cat(all_values, dim=0)
         old_lp_vec = torch.cat(all_old_lp, dim=0)
         rewards_vec = torch.cat(all_rewards, dim=0)
         dones_vec = torch.cat(all_dones, dim=0)
-    
-    logger.info(f"Pre-computed old policy: {len(old_lp_vec)} samples")
+
+    logger.info(f"✓ Pre-computed old policy: {len(old_lp_vec)} samples")
+    sys.stdout.flush()
     
     # Build index mapping
     index_loader = DataLoader(
@@ -737,6 +804,14 @@ def main():
     idx_to_pos = {idx: pos for pos, idx in enumerate(ordered_indices)}
 
     # Training Loop
+    logger.info("="*60)
+    logger.info("STAGE 4: PPO Training")
+    logger.info("="*60)
+    logger.info(f"Total epochs: {config.epochs}")
+    logger.info(f"Samples: {len(dataset)}, Batch size: {config.batch_size}")
+    logger.info(f"Gradient accumulation: {config.grad_accum}")
+    sys.stdout.flush()
+
     training_history = {
         'policy_loss': [],
         'value_loss': [],
@@ -754,29 +829,42 @@ def main():
         # CRITICAL: Re-compute old policy at epoch start and FREEZE it
         logger.info("Re-computing old policy for this epoch...")
         sys.stdout.flush()
-        
+
         with torch.no_grad():
             all_values, all_old_lp = [], []
             policy_model.eval()
-            
-            for input_ids, attn_mask, labels, *_ in DataLoader(
+
+            epoch_loader = DataLoader(
                 dataset,
                 batch_size=config.batch_size,
                 shuffle=False,
                 collate_fn=lambda b: collate_chat(b, tokenizer, config.max_seq_len)
-            ):
+            )
+
+            total_batches = len(epoch_loader)
+
+            for batch_idx, (input_ids, attn_mask, labels, *_) in enumerate(epoch_loader):
                 input_ids = input_ids.to(device)
                 attn_mask = attn_mask.to(device)
                 labels = labels.to(device)
-                
+
                 logits, values = policy_model(input_ids, attn_mask)
                 old_lp, _, _ = masked_token_stats(logits, labels, attn_mask, tokenizer)
-                
+
                 all_values.append(values.float().detach().cpu())
                 all_old_lp.append(old_lp.float().detach().cpu())
-            
+
+                # Show progress every 10 batches
+                if (batch_idx + 1) % 10 == 0 or (batch_idx + 1) == total_batches:
+                    progress_pct = (batch_idx + 1) / total_batches * 100
+                    logger.info(f"  Re-compute progress: {batch_idx + 1}/{total_batches} batches ({progress_pct:.1f}%)")
+                    sys.stdout.flush()
+
             values_vec = torch.cat(all_values, dim=0)
             old_lp_vec = torch.cat(all_old_lp, dim=0)
+
+        logger.info(f"✓ Re-computed old policy: {len(old_lp_vec)} samples")
+        sys.stdout.flush()
         
         # Compute advantages
         advantages = compute_gae(rewards_vec, values_vec, dones_vec, config.gamma, config.gae_lambda)
@@ -795,22 +883,29 @@ def main():
         
 
         # Training with FROZEN old_lp_vec
-        
+        logger.info("Starting training phase...")
+        sys.stdout.flush()
+
         policy_model.train()
-        
+
         total_loss = 0.0
         total_pl = 0.0
         total_vl = 0.0
         total_el = 0.0
         micro_steps = 0
-        
+
         train_loader = DataLoader(
             dataset,
             batch_size=config.batch_size,
             shuffle=True,
             collate_fn=lambda b: collate_chat(b, tokenizer, config.max_seq_len)
         )
-        
+
+        total_train_batches = len(train_loader)
+        total_grad_steps = (total_train_batches + config.grad_accum - 1) // config.grad_accum
+        logger.info(f"Total training batches: {total_train_batches}, Gradient steps: {total_grad_steps}")
+        sys.stdout.flush()
+
         optimizer.zero_grad(set_to_none=True)
         
         for batch_idx, (input_ids, attn_mask, labels, _, _, _, idxs) in enumerate(train_loader):
