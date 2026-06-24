@@ -5,9 +5,15 @@ This script runs the complete pipeline:
 1. PPO Training → 2. Sample Selection → 3. LLM Rollout → 4. Fine-tuning → 5. Evaluation
 
 Usage:
-    python main_pipeline.py --config config.json
     python main_pipeline.py --stage ppo
     python main_pipeline.py --stage all
+
+Note on --config:
+    --config expects a FLAT JSON whose keys match the PipelineConfig dataclass
+    fields below (the same schema this script writes to pipeline_config.json).
+    It is NOT the nested top-level config.json (llm/hvac/fewshot/... sections),
+    which is consumed by config_manager.py / the test suite, not by this
+    pipeline. Passing the nested file here silently falls back to defaults.
 """
 
 import os

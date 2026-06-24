@@ -1,5 +1,16 @@
 # HVAC Control with LLM - 完整自我蒸馏Pipeline
 
+> ⚠️ **现状说明与改进计划（2026-06 重启）**
+>
+> 经过一次完整的方法论审查，下文描述的 pipeline 存在几个**已知 gap**，正在逐步修复。
+> 在阅读下面的"6 阶段"叙述前，请先看 [`METHODOLOGY_REVIEW.md`](METHODOLOGY_REVIEW.md)。
+> 当前与文档不符的关键点：
+> - **Stage 4「自我蒸馏」未真正接入主流程**：`main_pipeline.py` 直接把原始
+>   `llm_rollout.json` 喂给微调，`prepare_distillation_data.py` 不会被调用。
+> - **评估非受控**：`draw_reward.py` 叠加的是不同 episode/天气/seed 的曲线，无法直接对比。
+>   新的受控评估器见 [`core_modules/evaluate.py`](core_modules/evaluate.py)。
+> - **奖励信号问题 / 微调算法问题**：详见 METHODOLOGY_REVIEW.md 的诊断与路线图。
+
 ## 项目概述
 
 本项目使用大型语言模型（Qwen 7B）结合强化学习（PPO）进行HVAC控制优化，实现了完整的**自我蒸馏（Self-Distillation）**训练流程。
