@@ -151,9 +151,22 @@ defensible contributions are where PPO structurally cannot compete:
 1. Run the best-of-N expert-iteration loop on one building; confirm `llm_ft ≫ llm`
    and that it approaches the optimum. Ablate: inference-time best-of-N (no
    fine-tuning) vs fine-tuning — the cheaper option may suffice.
-2. Multi-building training + held-out zero-shot evaluation (the generalization
-   result).
+2. Run the generalization sweep (`generalization_eval.py` / `--stage generalize`):
+   tooling is in place — needs a GPU run to produce the headline numbers
+   (one LLM transferring across buildings/climates; PPO cannot even run off its
+   training building).
 3. Add language-conditioned constraints to the prompt and measure adaptation.
+
+### A note on "beating PPO"
+
+With best-of-N (environment as verifier) PPO is no longer a ceiling, so beating it
+is *possible* but not the smart bet: PPO is already strong on single-building
+control, best-of-N is capped by the LLM's proposal quality, and a short horizon is
+myopic vs PPO's long-horizon return (hence `bon_horizon` defaults to 4). The
+robust story is **generalization** (PPO structurally cannot transfer) and that
+even *matching* PPO is a strong result given the LLM needs ~hundreds of
+self-distillation samples vs PPO's per-building 500k env steps, and transfers
+zero-shot.
 
 > Discipline: **every methodology change must be quantified on fixed episodes with
 > the evaluation harness before drawing conclusions.**

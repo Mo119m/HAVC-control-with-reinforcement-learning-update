@@ -67,6 +67,19 @@ python core_modules/evaluate.py \
     --out_dir pipeline_output/06_eval
 ```
 
+**Generalization (the headline experiment).** One LLM, evaluated zero-shot across
+many buildings/climates, vs PPO (which has fixed obs/action dims and so cannot
+even run on a building with a different zone count) and the rule baseline:
+
+```bash
+python core_modules/main_pipeline.py --stage generalize
+# or directly:
+python core_modules/generalization_eval.py --preset buildings \
+    --controllers rule ppo llm llm_ft \
+    --adapter pipeline_output/04_finetuning/final_model \
+    --train_scenario OfficeSmall/Hot_Dry --out_dir pipeline_output/07_generalization
+```
+
 ## Configuration
 
 Runtime configuration is the **flat** `PipelineConfig` dataclass in
@@ -103,15 +116,17 @@ METHODOLOGY_REVIEW.md  # Diagnosis of the old pipeline + improvement roadmap
 
 Done: controlled evaluation, best-of-N self-distillation (environment as
 verifier), AWR fine-tuning, multi-window rollout, advantage-ranked few-shot,
-end-to-end wiring. (A legacy PPO-critic advantage path is also available.)
+**cross-scenario generalization evaluation**, end-to-end wiring. (A legacy
+PPO-critic advantage path is also available.)
 
-Next, for a result worth having (see [`METHODOLOGY_REVIEW.md`](METHODOLOGY_REVIEW.md)):
-the LLM will not beat PPO/MPC at single-building optimal control. The defensible
-wins are where PPO structurally cannot compete:
-1. **Generalization** — self-distill on several buildings/climates, evaluate
-   zero-shot on held-out ones vs per-building-retrained PPO.
+The LLM will not beat PPO/MPC at single-building optimal control — that is a
+solved problem. The defensible wins are where PPO structurally cannot compete
+(see [`METHODOLOGY_REVIEW.md`](METHODOLOGY_REVIEW.md)):
+1. **Generalization** — one LLM across buildings/climates with no retraining
+   (`generalization_eval.py`, `--stage generalize`). PPO cannot even run on a
+   building with a different zone count.
 2. **Language-conditioned control** — natural-language constraints in the prompt
-   ("prioritize comfort in room 2", "minimize energy after 6pm") with no retraining.
+   ("prioritize comfort in room 2", "minimize energy after 6pm") with no retraining. *(next)*
 3. **Self-improvement** — iterate `bestofn → finetune` and show `llm_ft ≫ llm`.
 
 ## References

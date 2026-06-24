@@ -91,7 +91,7 @@ class PipelineConfig:
 
     # Best-of-N self-distillation (environment as verifier) — recommended path
     n_candidates: int = 6             # actions sampled per state
-    bon_horizon: int = 1             # counterfactual look-ahead length
+    bon_horizon: int = 4             # counterfactual look-ahead length (mitigates myopia)
     bon_sample_temperature: float = 0.8
 
     # Critic-based advantage (legacy alternative to best-of-N)
@@ -103,6 +103,9 @@ class PipelineConfig:
     eval_episodes: int = 10
     eval_controllers: tuple = ("zero", "rule", "ppo", "llm", "llm_ft")
     eval_offsets: tuple = (0, 2000, 4000)
+
+    # Cross-scenario generalization evaluation (run via --stage generalize)
+    gen_preset: str = "buildings"     # "buildings" or "climates"
 
     # Drive Backup (optional)
     drive_backup_path: Optional[str] = None  # e.g., "/content/drive/MyDrive/HVAC-RL-Backup"
@@ -259,6 +262,8 @@ class Pipeline:
             return self._run_finetuning()
         elif stage == "eval":
             return self._run_evaluation()
+        elif stage == "generalize":
+            return self._run_generalization()
         else:
             logger.error(f"Unknown stage: {stage}")
             return False
@@ -724,6 +729,39 @@ class Pipeline:
             logger.error(f"Evaluation failed: {e}")
             return False
 
+    def _run_generalization(self) -> bool:
+        """Cross-scenario generalization evaluation (the headline experiment).
+
+        One LLM (base + fine-tuned), evaluated zero-shot across many buildings /
+        climates, vs PPO (which cannot transfer) and the rule baseline.
+        """
+        logger.info("Running cross-scenario generalization evaluation...")
+        stage_path = str(Path(self.config.base_dir) / "07_generalization")
+
+        controllers = [c for c in self.config.eval_controllers if c != "zero"]
+        cmd = [
+            "python", "core_modules/generalization_eval.py",
+            "--controllers", *controllers,
+            "--preset", self.config.gen_preset,
+            "--target", str(self.config.target),
+            "--max_steps", str(self.config.llm_rollout_max_steps),
+            "--model_name", self.config.model_name,
+            "--ppo_model", str(self.paths["ppo_model"]),
+            "--adapter", str(self.paths["finetune_model"]),
+            "--train_scenario", f"{self.config.building}/{self.config.weather}",
+            "--out_dir", stage_path,
+        ]
+        if self.paths["fewshot_json"].exists():
+            cmd += ["--fewshot_json", str(self.paths["fewshot_json"])]
+        try:
+            subprocess.run(cmd, env={**os.environ, "PYTHONUNBUFFERED": "1"},
+                           check=True, stdout=None, stderr=None)
+            logger.info("Generalization evaluation completed")
+            return True
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Generalization evaluation failed: {e}")
+            return False
+
 
 def main():
     """Main entry point"""
@@ -741,7 +779,7 @@ def main():
         type=str,
         default="all",
         choices=["ppo", "select", "bestofn", "rollout", "advantage", "distill",
-                 "finetune", "eval", "all"],
+                 "finetune", "eval", "generalize", "all"],
         help="Pipeline stage to run"
     )
     parser.add_argument(

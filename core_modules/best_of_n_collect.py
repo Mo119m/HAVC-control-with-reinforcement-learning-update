@@ -147,7 +147,7 @@ class BestOfNConfig:
     episode_offset_stride: int = 0
 
     n_candidates: int = 6       # actions sampled per state
-    horizon: int = 1            # counterfactual look-ahead length
+    horizon: int = 4            # counterfactual look-ahead length (mitigates myopia)
     sample_temperature: float = 0.8  # >0 for candidate diversity
 
     model_name: str = "Qwen/Qwen2.5-7B-Instruct"
@@ -315,7 +315,7 @@ def main():
     p.add_argument("--episodes", type=int, default=1)
     p.add_argument("--episode_offset_stride", type=int, default=0)
     p.add_argument("--n_candidates", type=int, default=6)
-    p.add_argument("--horizon", type=int, default=1)
+    p.add_argument("--horizon", type=int, default=4)
     p.add_argument("--sample_temperature", type=float, default=0.8)
     p.add_argument("--model_name", default="Qwen/Qwen2.5-7B-Instruct")
     p.add_argument("--fewshot_json", default=None)

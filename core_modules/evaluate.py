@@ -263,8 +263,18 @@ class LLMController(Controller):
         self._calls = 0
 
     def _prime_model(self):
-        """Load base (and adapter) once and install into llm_agent_colab's cache."""
+        """Load base (and adapter) once and install into llm_agent_colab's cache.
+
+        Guarded so that evaluating the same model across many scenarios (e.g. the
+        generalization sweep) loads the weights only once.
+        """
         import llm_agent_colab as agent
+
+        prime_key = (self.cfg.model_name, self.adapter_path)
+        if getattr(agent, "_PRIMED_KEY", None) == prime_key and agent._MODEL is not None:
+            logger.info(f"[{self.name}] reusing already-loaded model")
+            return
+
         import torch
         from transformers import AutoTokenizer, AutoModelForCausalLM
 
@@ -288,6 +298,7 @@ class LLMController(Controller):
         # Install into the global cache so call_llm() reuses it
         agent._TOKENIZER = tok
         agent._MODEL = model
+        agent._PRIMED_KEY = prime_key
 
     def reset(self):
         self.history = self._deque(maxlen=self.cfg.hist_keep)
