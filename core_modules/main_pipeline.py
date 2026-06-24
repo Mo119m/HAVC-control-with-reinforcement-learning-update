@@ -623,7 +623,7 @@ class Pipeline:
 
         Runs the requested controllers on identical deterministic episodes and
         reports comparable metrics (return, comfort-violation rate, energy).
-        Replaces the old draw_reward.py overlay of non-comparable trajectories.
+        Replaces the old reward-curve overlay of non-comparable trajectories.
         """
         stage_name = self.config.eval_dir
         stage_path = str(Path(self.config.base_dir) / stage_name)

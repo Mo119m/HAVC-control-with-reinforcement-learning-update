@@ -4,7 +4,7 @@ Controlled Evaluation Harness for HVAC Controllers
 
 Why this exists
 ---------------
-The previous comparison (``draw_reward.py``) overlaid reward curves collected on
+The previous comparison overlaid reward curves collected on
 *different* episodes / weather windows / seeds, so it could not support any claim
 like "fine-tuned LLM > base LLM". This module fixes that by running every
 controller on the **exact same** deterministic episode(s) and reporting
