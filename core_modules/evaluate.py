@@ -201,7 +201,10 @@ class RuleBasedController(Controller):
 
     name = "rule"
 
-    def __init__(self, target: float = 22.0, gain: float = 0.5):
+    def __init__(self, target: float = 22.0, gain: float = 0.03):
+        # NOTE: BEAR is heavily over-actuated (maxpower=8000, hourly steps): a
+        # large action overshoots wildly, so a *small* gain is what tracks the
+        # target. gain≈0.03 keeps OfficeSmall within ~3°C; gain=0.5 diverges.
         self.target = target
         self.gain = gain
 
@@ -532,7 +535,7 @@ def main():
     parser.add_argument("--fewshot_json", default=None)
     parser.add_argument("--ppo_model", default="pipeline_output/01_ppo_training/ppo_final.zip")
     parser.add_argument("--adapter", default="pipeline_output/04_finetuning/final_model")
-    parser.add_argument("--rule_gain", type=float, default=0.5)
+    parser.add_argument("--rule_gain", type=float, default=0.03)
     parser.add_argument("--out_dir", default="pipeline_output/06_eval")
     args = parser.parse_args()
 

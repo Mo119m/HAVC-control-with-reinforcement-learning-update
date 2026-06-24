@@ -176,7 +176,7 @@ def main():
     p.add_argument("--fewshot_json", default=None)
     p.add_argument("--ppo_model", default="pipeline_output/01_ppo_training/ppo_final.zip")
     p.add_argument("--adapter", default="pipeline_output/04_finetuning/final_model")
-    p.add_argument("--rule_gain", type=float, default=0.5)
+    p.add_argument("--rule_gain", type=float, default=0.03)
     p.add_argument("--out_dir", default="pipeline_output/07_generalization")
     args = p.parse_args()
 
