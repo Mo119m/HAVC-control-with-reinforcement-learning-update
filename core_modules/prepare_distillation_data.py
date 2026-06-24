@@ -114,64 +114,74 @@ def is_valid_entry(entry: Dict, check_actions: bool = True) -> Tuple[bool, str]:
     return True, ""
 
 
+def _pick_signal_key(data: List[Dict]) -> str:
+    """Choose the ranking signal: prefer critic 'advantage' over raw 'reward'.
+
+    The raw reward is confounded by environment difficulty (see
+    METHODOLOGY_REVIEW.md). If entries carry an 'advantage' field (produced by
+    compute_advantage.py), rank by that instead.
+    """
+    if data and all(("advantage" in d and d["advantage"] is not None) for d in data):
+        return "advantage"
+    return "reward"
+
+
+def filter_by_signal(
+    data: List[Dict],
+    signal_key: str = "reward",
+    min_percentile: float = 0.5,
+    q_low: float = 0.05,
+    q_high: float = 0.99
+) -> List[Dict]:
+    """
+    Filter trajectories by a per-step quality signal (advantage or reward).
+
+    Strategy:
+    1. Remove outliers (below q_low or above q_high of the signal)
+    2. Keep trajectories with signal >= min_percentile
+
+    Args:
+        data: List of trajectory entries
+        signal_key: Which field to rank by ('advantage' or 'reward')
+        min_percentile: Minimum signal percentile to keep
+        q_low: Lower quantile for outlier removal
+        q_high: Upper quantile for outlier removal
+
+    Returns:
+        Filtered list
+    """
+    if len(data) == 0:
+        return []
+
+    vals = np.array([d[signal_key] for d in data])
+
+    lo = np.quantile(vals, q_low)
+    hi = np.quantile(vals, q_high)
+    logger.info(f"Signal '{signal_key}' range: [{lo:.4f}, {hi:.4f}]")
+
+    data_filtered = [d for d in data if lo <= d[signal_key] <= hi]
+    logger.info(f"After outlier removal: {len(data_filtered)} entries")
+
+    if not data_filtered:
+        return data_filtered
+
+    vals_f = np.array([d[signal_key] for d in data_filtered])
+    threshold = np.quantile(vals_f, min_percentile)
+    logger.info(f"Signal threshold (p={min_percentile}): {threshold:.4f}")
+
+    data_final = [d for d in data_filtered if d[signal_key] >= threshold]
+    logger.info(f"After signal filtering: {len(data_final)} entries")
+    return data_final
+
+
 def filter_by_reward(
     data: List[Dict],
     min_percentile: float = 0.5,
     q_low: float = 0.05,
     q_high: float = 0.99
 ) -> List[Dict]:
-    """
-    Filter trajectories by reward.
-    
-    Strategy:
-    1. Remove outliers (below q_low or above q_high)
-    2. Keep trajectories with reward >= min_percentile
-    
-    Args:
-        data: List of trajectory entries
-        min_percentile: Minimum reward percentile to keep
-        q_low: Lower quantile for outlier removal
-        q_high: Upper quantile for outlier removal
-        
-    Returns:
-        Filtered list
-    """
-    if len(data) == 0:
-        return []
-    
-    # Extract rewards
-    rewards = np.array([d["reward"] for d in data])
-    
-    # Remove outliers
-    r_low = np.quantile(rewards, q_low)
-    r_high = np.quantile(rewards, q_high)
-    
-    logger.info(f"Reward range: [{r_low:.2f}, {r_high:.2f}]")
-    
-    data_filtered = [
-        d for d in data
-        if r_low <= d["reward"] <= r_high
-    ]
-    
-    logger.info(f"After outlier removal: {len(data_filtered)} entries")
-    
-    # Filter by percentile
-    if len(data_filtered) > 0:
-        rewards_filtered = np.array([d["reward"] for d in data_filtered])
-        threshold = np.quantile(rewards_filtered, min_percentile)
-        
-        logger.info(f"Reward threshold (p={min_percentile}): {threshold:.2f}")
-        
-        data_final = [
-            d for d in data_filtered
-            if d["reward"] >= threshold
-        ]
-        
-        logger.info(f"After reward filtering: {len(data_final)} entries")
-        
-        return data_final
-    
-    return data_filtered
+    """Backward-compatible wrapper: filter by raw reward."""
+    return filter_by_signal(data, "reward", min_percentile, q_low, q_high)
 
 
 def prepare_distillation_data(config: DistillationConfig) -> List[Dict]:
@@ -235,9 +245,13 @@ def prepare_distillation_data(config: DistillationConfig) -> List[Dict]:
         logger.error("No valid entries found!")
         return []
     
-    # Filter by reward
-    filtered_data = filter_by_reward(
+    # Filter by quality signal (prefer critic advantage over raw reward)
+    signal_key = _pick_signal_key(valid_data)
+    logger.info(f"Ranking signal: '{signal_key}' "
+                f"({'critic advantage — decoupled from env difficulty' if signal_key == 'advantage' else 'raw reward — confounded; run compute_advantage.py for advantage'})")
+    filtered_data = filter_by_signal(
         valid_data,
+        signal_key=signal_key,
         min_percentile=config.min_reward_percentile,
         q_low=config.reward_q_low,
         q_high=config.reward_q_high

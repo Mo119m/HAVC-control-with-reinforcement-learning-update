@@ -82,9 +82,17 @@ class PipelineConfig:
     finetune_lr: float = 1e-5
     finetune_batch_size: int = 1
     finetune_grad_accum: int = 8
-    
+
+    # Advantage (critic-based) + AWR self-distillation
+    gamma: float = 0.99               # discount for TD advantage
+    use_awr: bool = True              # AWR fine-tuner (True) vs legacy offline-PPO (False)
+    awr_beta: float = 1.0             # AWR temperature
+    adv_keep_percentile: float = 0.5  # distill: keep top half by advantage
+
     # Evaluation
     eval_episodes: int = 10
+    eval_controllers: tuple = ("zero", "rule", "ppo", "llm", "llm_ft")
+    eval_offsets: tuple = (0, 2000, 4000)
 
     # Drive Backup (optional)
     drive_backup_path: Optional[str] = None  # e.g., "/content/drive/MyDrive/HVAC-RL-Backup"
@@ -102,7 +110,9 @@ class PipelineConfig:
             "fewshot_json": base / self.samples_dir / "few_shot_examples_structured.json",
             
             "llm_rollout_trajectory": base / self.llm_rollout_dir / "llm_rollout.json",
-            
+            "llm_rollout_adv": base / self.llm_rollout_dir / "llm_rollout_adv.json",
+            "distillation_data": base / self.llm_rollout_dir / "distillation_data.json",
+
             "finetune_model": base / self.finetune_dir / "final_model",
             "finetune_checkpoints": base / self.finetune_dir / "checkpoints",
             
@@ -212,19 +222,23 @@ class Pipeline:
         logger.info('='*60)
         
         if stage == "all":
-            stages = ["ppo", "select", "rollout", "finetune", "eval"]
+            stages = ["ppo", "select", "rollout", "advantage", "distill", "finetune", "eval"]
             for s in stages:
                 if not self.run_stage(s):
                     logger.error(f"Stage {s} failed, stopping pipeline")
                     return False
             return True
-        
+
         if stage == "ppo":
             return self._run_ppo_training()
         elif stage == "select":
             return self._run_sample_selection()
         elif stage == "rollout":
             return self._run_llm_rollout()
+        elif stage == "advantage":
+            return self._run_advantage()
+        elif stage == "distill":
+            return self._run_distillation()
         elif stage == "finetune":
             return self._run_finetuning()
         elif stage == "eval":
@@ -448,8 +462,77 @@ class Pipeline:
             logger.error(f"LLM rollout failed: {e}")
             return False
     
+    def _run_advantage(self) -> bool:
+        """Stage 3.5: Critic-based advantage computation.
+
+        Augments the LLM rollout with V(s) and TD advantage using the trained
+        PPO critic, decoupling action merit from environment difficulty.
+        """
+        logger.info("Computing critic-based advantages...")
+
+        if not self.paths["llm_rollout_trajectory"].exists():
+            logger.error("LLM rollout not found, run 'rollout' stage first")
+            return False
+        if not self.paths["ppo_model"].exists():
+            logger.error("PPO model not found, run 'ppo' stage first (needed for the critic)")
+            return False
+
+        cmd = [
+            "python", "core_modules/compute_advantage.py",
+            "--rollout", str(self.paths["llm_rollout_trajectory"]),
+            "--ppo_model", str(self.paths["ppo_model"]),
+            "--output", str(self.paths["llm_rollout_adv"]),
+            "--gamma", str(self.config.gamma),
+        ]
+        try:
+            subprocess.run(cmd, env={**os.environ, "PYTHONUNBUFFERED": "1"},
+                           check=True, stdout=None, stderr=None)
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Advantage computation failed: {e}")
+            return False
+
+        if not self.paths["llm_rollout_adv"].exists():
+            logger.error("Advantage-augmented rollout not produced")
+            return False
+        logger.info("✅ Advantage computation completed")
+        return True
+
+    def _run_distillation(self) -> bool:
+        """Stage 4: Self-distillation data prep (advantage-based filtering)."""
+        logger.info("Preparing self-distillation data...")
+
+        # Prefer the advantage-augmented rollout; fall back to raw rollout
+        source = self.paths["llm_rollout_adv"] if self.paths["llm_rollout_adv"].exists() \
+            else self.paths["llm_rollout_trajectory"]
+        if not source.exists():
+            logger.error("No rollout to distill, run 'rollout' (and 'advantage') first")
+            return False
+        if source == self.paths["llm_rollout_trajectory"]:
+            logger.warning("Advantage file missing — distilling on RAW REWARD "
+                           "(run 'advantage' stage for the proper signal)")
+
+        env = {
+            **os.environ,
+            "PYTHONUNBUFFERED": "1",
+            "LLM_ROLLOUT_JSON": str(source),
+            "DISTILLATION_OUTPUT": str(self.paths["distillation_data"]),
+            "MIN_REWARD_PERCENTILE": str(self.config.adv_keep_percentile),
+        }
+        try:
+            subprocess.run(["python", "core_modules/prepare_distillation_data.py"],
+                           env=env, check=True, stdout=None, stderr=None)
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Distillation data prep failed: {e}")
+            return False
+
+        if not self.paths["distillation_data"].exists():
+            logger.error("Distillation data not produced")
+            return False
+        logger.info("✅ Self-distillation data prepared")
+        return True
+
     def _run_finetuning(self) -> bool:
-        """Stage 4: Fine-tuning"""
+        """Stage 5: Fine-tuning (AWR self-distillation by default)."""
         stage_name = self.config.finetune_dir
         stage_path = str(Path(self.config.base_dir) / stage_name)
 
@@ -462,24 +545,43 @@ class Pipeline:
 
         logger.info("Starting fine-tuning...")
 
-        if not self.paths["llm_rollout_trajectory"].exists():
-            logger.error("LLM rollout trajectory not found, run 'rollout' stage first")
+        # Choose training data: distilled (preferred) > advantage-augmented > raw
+        if self.paths["distillation_data"].exists():
+            train_data = self.paths["distillation_data"]
+        elif self.paths["llm_rollout_adv"].exists():
+            train_data = self.paths["llm_rollout_adv"]
+        elif self.paths["llm_rollout_trajectory"].exists():
+            train_data = self.paths["llm_rollout_trajectory"]
+        else:
+            logger.error("No training data found, run 'rollout' stage first")
             return False
-        
+        logger.info(f"Fine-tuning data: {train_data}")
+
         env = {
             **os.environ,
             "PYTHONUNBUFFERED": "1",  # Disable output buffering for real-time logs
             "BASE_MODEL": self.config.model_name,
-            "ROLLOUT_GLOBS": str(self.paths["llm_rollout_trajectory"]),
+            "ROLLOUT_GLOBS": str(train_data),
             "SAVE_DIR": str(Path(self.config.base_dir) / self.config.finetune_dir),
             "EPOCHS": str(self.config.finetune_epochs),
             "LR": str(self.config.finetune_lr),
         }
-        
+
+        if self.config.use_awr:
+            script = "core_modules/awr_finetune.py"
+            env["AWR_BETA"] = str(self.config.awr_beta)
+            # Distill already filtered by advantage; let AWR weight without re-cutting
+            env["ADV_KEEP_PERCENTILE"] = "0.0" if train_data == self.paths["distillation_data"] \
+                else str(self.config.adv_keep_percentile)
+            logger.info(f"Using AWR fine-tuner (beta={self.config.awr_beta})")
+        else:
+            script = "core_modules/7b_finetune_fixed.py"
+            logger.info("Using legacy offline-PPO fine-tuner")
+
         try:
             # Run with real-time output streaming (no timeout)
             result = subprocess.run(
-                ["python", "core_modules/7b_finetune_fixed.py"],
+                ["python", script],
                 env=env,
                 check=True,
                 stdout=None,
@@ -506,74 +608,48 @@ class Pipeline:
             return False
     
     def _run_evaluation(self) -> bool:
-        """Stage 5: Evaluation"""
+        """Stage 6: Controlled evaluation.
+
+        Runs the requested controllers on identical deterministic episodes and
+        reports comparable metrics (return, comfort-violation rate, energy).
+        Replaces the old draw_reward.py overlay of non-comparable trajectories.
+        """
         stage_name = self.config.eval_dir
         stage_path = str(Path(self.config.base_dir) / stage_name)
 
-        # Try to restore from backup
-        if self._try_restore_stage(stage_name, stage_path):
-            if self.paths["eval_results"].exists():
-                logger.info("✅ Evaluation restored from backup, skipping evaluation")
-                return True
+        logger.info("Starting controlled evaluation...")
 
-        logger.info("Starting evaluation...")
+        # Only request controllers whose artifacts exist
+        controllers = list(self.config.eval_controllers)
+        if "ppo" in controllers and not self.paths["ppo_model"].exists():
+            logger.warning("PPO model missing — dropping 'ppo' from evaluation")
+            controllers = [c for c in controllers if c != "ppo"]
+        if "llm_ft" in controllers and not self.paths["finetune_model"].exists():
+            logger.warning("Fine-tuned model missing — dropping 'llm_ft' from evaluation")
+            controllers = [c for c in controllers if c != "llm_ft"]
 
-        # Collect all trajectory files
-        trajectories = []
-        
-        if self.paths["ppo_trajectory"].exists():
-            trajectories.append(str(self.paths["ppo_trajectory"]))
-        
-        if self.paths["llm_rollout_trajectory"].exists():
-            trajectories.append(str(self.paths["llm_rollout_trajectory"]))
-        
-        if not trajectories:
-            logger.error("No trajectories found for evaluation")
-            return False
-        
-        # Plot comparison
         cmd = [
-            "python", "core_modules/draw_reward.py",
-            *trajectories,
-            "--output", str(self.paths["eval_plots"]),
-            "--smooth", "5",
+            "python", "core_modules/evaluate.py",
+            "--controllers", *controllers,
+            "--building", self.config.building,
+            "--climate", self.config.weather,
+            "--location", self.config.location,
+            "--max_steps", str(self.config.llm_rollout_max_steps),
+            "--episode_offsets", *[str(o) for o in self.config.eval_offsets],
+            "--model_name", self.config.model_name,
+            "--ppo_model", str(self.paths["ppo_model"]),
+            "--adapter", str(self.paths["finetune_model"]),
+            "--out_dir", stage_path,
         ]
+        if self.paths["fewshot_json"].exists():
+            cmd += ["--fewshot_json", str(self.paths["fewshot_json"])]
 
         try:
-            # Run with real-time output streaming
-            env = {**os.environ, "PYTHONUNBUFFERED": "1"}
-            result = subprocess.run(
-                cmd,
-                env=env,
-                check=True,
-                stdout=None,
-                stderr=None
-            )
-
-            logger.info("Evaluation completed")
-
-            # Save evaluation results
-            results = {
-                "trajectories_evaluated": len(trajectories),
-                "plot_path": str(self.paths["eval_plots"]),
-            }
-
-            with open(self.paths["eval_results"], "w") as f:
-                json.dump(results, f, indent=2)
-
-            # Generate comprehensive comparison visualizations
-            logger.info("Generating final comparison visualizations...")
-            try:
-                self.visualizer.visualize_final_comparison()
-                logger.info("✅ Final comparison visualizations saved")
-            except Exception as e:
-                logger.warning(f"Failed to generate final comparison visualizations: {e}")
-
-            # Backup to Drive
+            subprocess.run(cmd, env={**os.environ, "PYTHONUNBUFFERED": "1"},
+                           check=True, stdout=None, stderr=None)
+            logger.info("Controlled evaluation completed")
             self._backup_stage(stage_name, stage_path)
-
             return True
-
         except subprocess.CalledProcessError as e:
             logger.error(f"Evaluation failed: {e}")
             return False
@@ -594,7 +670,7 @@ def main():
         "--stage",
         type=str,
         default="all",
-        choices=["ppo", "select", "rollout", "finetune", "eval", "all"],
+        choices=["ppo", "select", "rollout", "advantage", "distill", "finetune", "eval", "all"],
         help="Pipeline stage to run"
     )
     parser.add_argument(

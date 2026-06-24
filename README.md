@@ -1,15 +1,25 @@
 # HVAC Control with LLM - 完整自我蒸馏Pipeline
 
-> ⚠️ **现状说明与改进计划（2026-06 重启）**
+> ⚠️ **重要：2026-06 重启的方法论重构**
 >
-> 经过一次完整的方法论审查，下文描述的 pipeline 存在几个**已知 gap**，正在逐步修复。
-> 在阅读下面的"6 阶段"叙述前，请先看 [`METHODOLOGY_REVIEW.md`](METHODOLOGY_REVIEW.md)。
-> 当前与文档不符的关键点：
-> - **Stage 4「自我蒸馏」未真正接入主流程**：`main_pipeline.py` 直接把原始
->   `llm_rollout.json` 喂给微调，`prepare_distillation_data.py` 不会被调用。
-> - **评估非受控**：`draw_reward.py` 叠加的是不同 episode/天气/seed 的曲线，无法直接对比。
->   新的受控评估器见 [`core_modules/evaluate.py`](core_modules/evaluate.py)。
-> - **奖励信号问题 / 微调算法问题**：详见 METHODOLOGY_REVIEW.md 的诊断与路线图。
+> 经过一次完整的方法论审查（见 [`METHODOLOGY_REVIEW.md`](METHODOLOGY_REVIEW.md)），原 pipeline
+> 的几个根因问题已修复。**下文较旧的叙述描述的是原始设计**；当前实际运行的是改进版 **7 阶段** pipeline：
+>
+> ```
+> ppo → select → rollout → advantage → distill → finetune(AWR) → eval(受控)
+> ```
+>
+> 关键改动：
+> - **`advantage`（新）**：[`compute_advantage.py`](core_modules/compute_advantage.py) 用 PPO critic
+>   给每步算 TD advantage，把"动作好坏"从"环境难度"里解耦（原来按 raw reward 选，被环境难度污染）。
+> - **`distill`（已接入并改进）**：[`prepare_distillation_data.py`](core_modules/prepare_distillation_data.py)
+>   现在**优先按 advantage** 筛选高质量子集，并真正接入了主流程。
+> - **`finetune`（算法替换）**：默认用 [`awr_finetune.py`](core_modules/awr_finetune.py)（Advantage-Weighted
+>   Regression），替换掉理论上不成立的 offline-PPO（`7b_finetune_fixed.py` 保留，`use_awr=False` 可切回对比）。
+> - **`eval`（受控）**：[`evaluate.py`](core_modules/evaluate.py) 在**完全相同的 episode** 上对比
+>   `zero/rule/ppo/llm/llm_ft`，报告回报 / 舒适度越界率 / 能耗（替换掉无法对比的 `draw_reward.py` 叠图）。
+>
+> 一键运行改进版：`python core_modules/main_pipeline.py --stage all`
 
 ## 项目概述
 

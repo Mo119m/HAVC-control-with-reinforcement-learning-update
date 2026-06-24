@@ -78,11 +78,27 @@ Best-of-N 拒绝采样蒸馏**，而非在筛选乱序单步数据上跑 GAE-PPO
 | 优先级 | 改动 | 状态 |
 |---|---|---|
 | **P0** | 受控评估 harness（固定 episode 对比 PPO / 规则基线 / 基础LLM / 微调LLM）| ✅ `core_modules/evaluate.py` |
-| **P0** | critic-based advantage：用 PPO critic 给 LLM transition 算 advantage | ⏳ 待做 |
-| **P1** | 用 Best-of-N 拒绝采样自蒸馏 / AWR 替换 offline-PPO 微调 | ⏳ 待做 |
-| **P1** | 扩大并多样化数据（多 episode / 多天气窗口）+ train/val 划分 | ⏳ 待做 |
-| **P2** | few-shot 改用 LLM 自身 Best-of-N 选出的范例（真自蒸馏），按 advantage 排序 | ⏳ 待做 |
-| **P2** | 接通 pipeline、对齐 README/config | ⏳ 待做 |
+| **P0** | critic-based advantage：用 PPO critic 给 LLM transition 算 advantage | ✅ `core_modules/compute_advantage.py` |
+| **P1** | 用 AWR（advantage 加权回归）替换 offline-PPO 微调 | ✅ `core_modules/awr_finetune.py` |
+| **P1** | distill 阶段改成 advantage-based 筛选并接入主流程 | ✅ `prepare_distillation_data.py` + `main_pipeline.py` |
+| **P1** | 扩大并多样化数据（多 episode / 多天气窗口）+ train/val 划分 | ⏳ 待做（评估已支持多 offset；rollout 多 episode 仍需扩量）|
+| **P2** | few-shot 改用 LLM 自身高 advantage 范例（真自蒸馏），按 advantage 排序 | ⏳ 待做 |
+| **P2** | 接通 pipeline、对齐 README/config | ✅ 7 阶段已接通；config/README 已对齐 |
+
+### 新版 pipeline（7 阶段）
+
+```
+ppo → select → rollout → advantage → distill → finetune(AWR) → eval(受控)
+```
+
+- **advantage**：`compute_advantage.py`，用 PPO critic 给 rollout 算 TD advantage（解耦环境难度）。
+- **distill**：`prepare_distillation_data.py`，**优先按 advantage**（缺失才回退 reward）筛高质量子集。
+- **finetune**：默认 `awr_finetune.py`（AWR）；`use_awr=False` 可切回旧 `7b_finetune_fixed.py` 做对比。
+- **eval**：`evaluate.py`，固定 episode 受控对比 `zero/rule/ppo/llm/llm_ft`。
+
+> 仍待做（下一步）：(1) rollout 扩到多 episode/多天气窗口以增大蒸馏数据量并降过拟合；
+> (2) few-shot 从 LLM 自身高 advantage 步骤里选，做到端到端的真自蒸馏；
+> (3) 用评估 harness 跑 A/B：旧 offline-PPO vs 新 AWR，量化提升。
 
 ### 度量指标（评估 harness 输出）
 
