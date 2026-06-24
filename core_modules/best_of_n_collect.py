@@ -175,10 +175,13 @@ def sample_candidate_actions(prompt: str, n: int, n_actions: int, cfg: BestOfNCo
     tokenizer, model = load_llm(cfg.model_name, os.getenv("HF_TOKEN"))
     device = next(model.parameters()).device
 
-    inputs = tokenizer.apply_chat_template(
+    enc = tokenizer.apply_chat_template(
         [{"role": "user", "content": prompt.strip()}],
         add_generation_prompt=True, return_tensors="pt",
-    ).to(device)
+    )
+    # Newer transformers return a BatchEncoding (dict); older ones a bare tensor.
+    input_ids = (enc["input_ids"] if isinstance(enc, dict) else enc).to(device)
+    prompt_len = input_ids.shape[1]
 
     gen_kwargs = dict(
         max_new_tokens=cfg.max_new_tokens,
@@ -187,11 +190,11 @@ def sample_candidate_actions(prompt: str, n: int, n_actions: int, cfg: BestOfNCo
         pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
     )
     with torch.no_grad():
-        out = model.generate(inputs, **gen_kwargs)
+        out = model.generate(input_ids, **gen_kwargs)
 
     actions = []
     for seq in out:
-        text = tokenizer.decode(seq[inputs.shape[1]:], skip_special_tokens=True)
+        text = tokenizer.decode(seq[prompt_len:], skip_special_tokens=True)
         a, _ = parse_actions_with_validation(text, n_actions)
         if a is not None:
             actions.append([float(np.clip(x, -1.0, 1.0)) for x in a])

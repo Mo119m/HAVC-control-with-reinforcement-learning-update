@@ -186,10 +186,14 @@ def call_llm(
     try:
         # Apply chat template
         inputs = tokenizer.apply_chat_template(
-            messages, 
-            add_generation_prompt=True, 
+            messages,
+            add_generation_prompt=True,
             return_tensors="pt"
         )
+        # Newer transformers return a BatchEncoding (dict); older ones a bare
+        # tensor. Normalize to the input_ids tensor so .shape / slicing work.
+        if isinstance(inputs, dict):
+            inputs = inputs["input_ids"]
         
         logger.debug(f"Input tokens: {inputs.shape[1]}")
         
