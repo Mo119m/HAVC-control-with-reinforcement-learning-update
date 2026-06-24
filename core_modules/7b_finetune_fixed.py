@@ -143,11 +143,11 @@ class FineTuneConfig:
 
 def plot_finetune_results(history: Dict[str, List], save_dir: str):
     """
-    绘制微调训练结果图表
+    Plot fine-tuning training results.
 
     Args:
-        history: 包含训练历史的字典 {'policy_loss': [...], 'value_loss': [...], ...}
-        save_dir: 保存目录
+        history: dict of training history {'policy_loss': [...], 'value_loss': [...], ...}
+        save_dir: output directory
     """
     try:
         fig, axes = plt.subplots(2, 2, figsize=(14, 10))
@@ -195,14 +195,14 @@ def plot_finetune_results(history: Dict[str, List], save_dir: str):
 
         plt.tight_layout()
 
-        # 保存
+        # Save
         plot_path = Path(save_dir) / "finetune_training_curves.png"
         plt.savefig(plot_path, dpi=150, bbox_inches='tight')
         plt.close()
 
         logger.info(f"📊 Fine-tuning plots saved to: {plot_path}")
 
-        # 保存历史数据为 JSON
+        # Save history as JSON
         history_path = Path(save_dir) / "training_history.json"
         with open(history_path, 'w') as f:
             json.dump({k: [float(v) for v in vals] for k, vals in history.items()}, f)
@@ -986,7 +986,7 @@ def main():
         logger.info(f"  Value Loss: {total_vl/n_batches:.4f}")
         logger.info(f"  Entropy: {total_el/n_batches:.4f}")
 
-        # 记录训练历史
+        # Record training history
         training_history['total_loss'].append(total_loss/n_batches)
         training_history['policy_loss'].append(total_pl/n_batches)
         training_history['value_loss'].append(total_vl/n_batches)
@@ -1021,7 +1021,7 @@ def main():
 
     logger.info(f"Saved final model to {config.save_dir}")
 
-    # 绘制训练曲线
+    # Plot training curves
     plot_finetune_results(training_history, config.save_dir)
 
     # Validation

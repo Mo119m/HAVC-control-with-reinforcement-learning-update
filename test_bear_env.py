@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-快速测试BEAR环境是否能正常工作
+Quick smoke test that the BEAR environment works.
 """
 
 import sys
@@ -8,74 +8,75 @@ import numpy as np
 from BEAR.Env.env_building import BuildingEnvReal
 from BEAR.Utils.utils_building import ParameterGenerator
 
+
 def test_bear_environment():
-    """测试BEAR环境初始化和基本操作"""
-    print("="*70)
-    print("BEAR环境测试")
-    print("="*70)
+    """Test BEAR environment initialization and basic operations."""
+    print("=" * 70)
+    print("BEAR environment test")
+    print("=" * 70)
 
     try:
-        # 创建参数生成器
-        print("\n1. 创建环境参数...")
+        # Create the parameter generator
+        print("\n1. Creating environment parameters...")
         param = ParameterGenerator(
-            "OfficeLarge",  # 使用实际存在的数据文件
+            "OfficeLarge",  # use a data file that actually exists
             "Hot_Dry",
             "Tucson",
             root="./BEAR/Data/"
         )
-        print("✅ 参数生成器创建成功")
+        print("✅ Parameter generator created")
 
-        # 创建环境
-        print("\n2. 初始化BEAR环境...")
+        # Create the environment
+        print("\n2. Initializing the BEAR environment...")
         env = BuildingEnvReal(param)
-        print("✅ 环境初始化成功")
+        print("✅ Environment initialized")
 
-        # 检查环境属性
-        print("\n3. 检查环境属性:")
-        print(f"   观察空间: {env.observation_space}")
-        print(f"   动作空间: {env.action_space}")
+        # Inspect environment properties
+        print("\n3. Environment properties:")
+        print(f"   Observation space: {env.observation_space}")
+        print(f"   Action space: {env.action_space}")
         if isinstance(param, dict):
-            print(f"   最大步数: {param.get('max_steps', 'N/A')}")
+            print(f"   Max steps: {param.get('max_steps', 'N/A')}")
         else:
-            print(f"   最大步数: {param.max_steps}")
+            print(f"   Max steps: {param.max_steps}")
 
-        # 重置环境
-        print("\n4. 重置环境...")
+        # Reset the environment
+        print("\n4. Resetting the environment...")
         obs, info = env.reset()
-        print(f"✅ 环境重置成功")
-        print(f"   观察维度: {obs.shape}")
-        print(f"   观察范围: [{obs.min():.2f}, {obs.max():.2f}]")
+        print("✅ Environment reset")
+        print(f"   Observation shape: {obs.shape}")
+        print(f"   Observation range: [{obs.min():.2f}, {obs.max():.2f}]")
 
-        # 执行几步测试
-        print("\n5. 执行测试步骤...")
+        # Run a few test steps
+        print("\n5. Running test steps...")
         total_reward = 0
         for step in range(5):
-            # 随机动作
-            action = env.action_space.sample()
+            action = env.action_space.sample()  # random action
             obs, reward, terminated, truncated, info = env.step(action)
             total_reward += reward
-            print(f"   步骤 {step+1}: reward={reward:.2f}, done={terminated or truncated}")
+            print(f"   Step {step+1}: reward={reward:.2f}, done={terminated or truncated}")
 
             if terminated or truncated:
-                print("   环境终止")
+                print("   Environment terminated")
                 break
 
-        print(f"\n✅ 累计奖励: {total_reward:.2f}")
+        print(f"\n✅ Total reward: {total_reward:.2f}")
 
-        # 关闭环境
+        # Close the environment
         env.close()
-        print("\n✅ 环境关闭成功")
+        print("\n✅ Environment closed")
 
-        print("\n" + "="*70)
-        print("BEAR环境测试完成 - 所有测试通过！")
-        print("="*70)
+        print("\n" + "=" * 70)
+        print("BEAR environment test complete - all checks passed!")
+        print("=" * 70)
         return 0
 
     except Exception as e:
-        print(f"\n❌ 错误: {e}")
+        print(f"\n❌ Error: {e}")
         import traceback
         traceback.print_exc()
         return 1
+
 
 if __name__ == "__main__":
     sys.exit(test_bear_environment())

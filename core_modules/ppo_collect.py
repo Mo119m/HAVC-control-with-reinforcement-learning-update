@@ -54,7 +54,7 @@ def _get_default_data_root():
 class MetricsCallback(CheckpointCallback):
     """
     Callback to collect PPO training metrics for plotting.
-    收集 PPO 训练指标用于绘图。
+    Collect PPO training metrics for plotting.
     """
     def __init__(self, save_freq, save_path, name_prefix="rl_model", verbose=0):
         super().__init__(save_freq, save_path, name_prefix, verbose)
@@ -132,9 +132,9 @@ class MetricsCallback(CheckpointCallback):
 
 def plot_training_results(trajectory_path: str, save_dir: str, metrics: dict = None):
     """
-    绘制 PPO 训练结果图表
+    Plot PPO training results.
 
-    生成的图表:
+    Generated charts:
     1. Episode Reward Mean (ep_rew_mean)
     2. Episode Length Mean (ep_len_mean)
     3. Explained Variance
@@ -163,7 +163,7 @@ def plot_training_results(trajectory_path: str, save_dir: str, metrics: dict = N
         rewards = [d.get('reward', 0) for d in data]
         steps = list(range(len(rewards)))
 
-        # 创建更大的图表 (4x2)
+        # Create a larger 4x2 figure
         fig, axes = plt.subplots(4, 2, figsize=(16, 20))
         fig.suptitle('PPO Training Results - Comprehensive Metrics', fontsize=16, fontweight='bold')
 
@@ -310,14 +310,14 @@ def plot_training_results(trajectory_path: str, save_dir: str, metrics: dict = N
 
         plt.tight_layout()
 
-        # 保存图表
+        # Save figure
         plot_path = Path(save_dir) / "ppo_training_results.png"
         plt.savefig(plot_path, dpi=150, bbox_inches='tight')
         plt.close()
 
         logger.info(f"📊 Training plots saved to: {plot_path}")
 
-        # 保存 metrics 数据
+        # Save metrics data
         if metrics:
             metrics_path = Path(save_dir) / "training_metrics.json"
             with open(metrics_path, 'w') as f:
@@ -569,7 +569,7 @@ def main():
         model.save(str(model_path))
         logger.info(f"Saved final model to {model_path}")
 
-        # 绘制训练结果图表 (使用收集的 metrics)
+        # Plot training results (using collected metrics)
         trajectory_path = save_dir / "ppo_trajectory.json"
         if trajectory_path.exists():
             plot_training_results(

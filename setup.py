@@ -28,6 +28,7 @@ setup(
         "scikit-learn>=1.3.0",
         "scipy>=1.11.0",
         "matplotlib>=3.7.0",
+        "seaborn>=0.12.0",
         "pvlib>=0.10.0",
         "tqdm>=4.65.0",
     ],

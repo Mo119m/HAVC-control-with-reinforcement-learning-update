@@ -5,11 +5,11 @@ This module filters high-reward trajectories from LLM rollout for fine-tuning.
 This implements the "self-distillation" approach where the LLM learns from its
 own successful behaviors.
 
-自我蒸馏核心逻辑：
-1. LLM生成大量轨迹 (llm_rollout.json)
-2. 筛选reward高的轨迹 (这个模块)
-3. 用筛选后的数据微调LLM
-4. 微调后的LLM性能提升
+Self-distillation core logic:
+1. The LLM generates many trajectories (llm_rollout.json)
+2. Filter high-quality trajectories (this module)
+3. Fine-tune the LLM on the filtered data
+4. The fine-tuned LLM improves
 """
 
 import os

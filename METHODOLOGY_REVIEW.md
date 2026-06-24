@@ -1,113 +1,138 @@
-# 方法论审查与改进路线图 (Methodology Review)
+# Methodology Review & Improvement Roadmap
 
-> 目的：诊断「为什么最终结果一般」，并给出可落地的改进路线。
-> 适用分支：`claude/focused-cori-6TVCM`。
+> Purpose: diagnose why the original pipeline produced mediocre results, and lay
+> out a concrete, prioritized plan to fix it.
 
 ---
 
 ## TL;DR
 
-当前 pipeline 的最终效果受限于 **3 个根因**，按影响排序：
+The original pipeline was limited by **three root causes**, in order of impact:
 
-1. **奖励信号被环境难度污染** —— few-shot 选择、自蒸馏筛选、微调 advantage 全部用 BEAR 的逐步
-   reward 绝对值，而这个值主要由"当时天气/负荷有多难"决定，而非"动作有多好"。等于在训练模型
-   "去待在容易的环境里"。
-2. **微调阶段的 offline-PPO 在理论上不成立** —— GAE 跑在被筛选+被打乱的单步数据上、value head
-   随机初始化只在百级样本上训练、old policy 每个 epoch 用更新后的策略重算、advantage 归一化
-   与"筛选好样本"的初衷互相打架。
-3. **整条链路缺乏受控评估** —— 现有 `draw_reward.py` 把不同 episode / 天气 / seed 的曲线叠在一起，
-   不是同条件对比，因此无法判断任何改动是否真的带来提升（过去的调参基本是盲调）。
+1. **The reward signal was confounded by environment difficulty.** Few-shot
+   selection, self-distillation filtering, and the fine-tuning advantage all used
+   BEAR's raw per-step reward — a value driven mostly by how hard the current
+   conditions are (outside temperature, irradiance, occupancy), not by how good
+   the action was. This effectively trained the model to "be in easy conditions",
+   which it cannot control.
+2. **The fine-tuning "offline PPO" was theoretically unsound.** GAE was run over a
+   filtered, shuffled, single-step dataset; the value head was randomly
+   initialized and trained on ~100-200 samples; the "old policy" was recomputed
+   from the updated policy each epoch; and advantage normalization fought the
+   "imitate the good samples" intent.
+3. **There was no controlled evaluation.** `draw_reward.py` overlaid reward
+   curves from different episodes / weather / seeds, so it was impossible to tell
+   whether any change actually helped (past tuning was effectively blind).
 
-> BEAR 环境其实是**完全确定性**的（`reset` 永远从 `epochs=0`、初始温度=target 开始，天气按 EPW
-> 顺序读取）。只要固定策略随机性（PPO `deterministic=True`、LLM `temperature=0`），就能做到逐字节
-> 相同 episode 的受控对比。这是修复 #3 的基础，也是其他一切改进的前提。
-
----
-
-## 详细诊断
-
-### 1. 奖励信号被环境难度污染（头号根因）
-
-`BEAR/Customize/reward_functions.py` 的逐步 reward = `-(动作能耗 + 误差 + 温度越界 + CO2)`。
-在某个时间步，这个值的大小主要取决于**外部条件**（室外温度、太阳辐照、人员负荷），而不是
-"这个动作相对其它动作好不好"。因此：
-
-- `select_representative.py`：按 "reward 最高" 选 few-shot → 实际选出**天气温和的轻松时刻**。
-- `prepare_distillation_data.py` / 微调内的分位筛选：保留 "高 reward 步" → 同样偏向轻松时刻。
-- `7b_finetune_fixed.py` 的 GAE advantage → 主要反映环境难度起伏，而非动作优劣。
-
-**正确做法**：用 *同一状态下相对 baseline 的优势 (advantage)* 作为信号，把"动作优劣"与"环境难度"
-解耦。最直接的方式是用 PPO 训练得到的 critic `V(s)` 计算 `A = r + γV(s') − V(s)`。
-
-### 2. 微调阶段 offline-PPO 不成立
-
-`core_modules/7b_finetune_fixed.py`：
-
-- **GAE 跑在筛选+乱序数据上**：先按 reward 分位裁剪（破坏时间相邻性），再 `compute_gae`，
-  `next_value = values[t+1]` 取到的是无关状态的值 → advantage ≈ 噪声。
-- **value head 随机初始化**（单层 bf16 Linear），只在约 100–200 个样本上训几个 epoch → `V(s)` ≈ 噪声
-  → GAE 噪声叠噪声。
-- **`old_lp` 每个 epoch 用更新后的策略重算** → 没有稳定参考策略，PPO ratio 退化、clip 失效。
-- **逻辑自相矛盾**：先筛出"高 reward 好样本"，又把 advantage 归一化到零均值 → 约一半好样本拿到
-  负 advantage 被往下压；"模仿成功经验"与 PPO 目标互相打架。
-
-**正确做法**：对"单步 reward + 离线筛选数据"，应使用 **filtered BC / 加权回归 (AWR/RWR) /
-Best-of-N 拒绝采样蒸馏**，而非在筛选乱序单步数据上跑 GAE-PPO。
-
-### 3. 缺乏受控评估
-
-`core_modules/draw_reward.py` 仅把 PPO 轨迹（500k 训练中采的）、LLM rollout、微调后 rollout 三条
-**不同 episode/天气/seed** 的 reward 曲线叠加。无法得出 "PPO ≈ 微调LLM > 基础LLM" 的结论。
-
-**正确做法**：固定一组 eval episodes，所有控制器在**相同状态序列**上跑，报告 episode 总回报、
-舒适度越界率、能耗。详见 `core_modules/evaluate.py`。
-
-### 其他问题
-
-4. **宣传的自蒸馏筛选未接入流程**：`main_pipeline.py` 把原始 `llm_rollout.json` 直接喂给微调，
-   `prepare_distillation_data.py`（README 的 Stage 4）从未被调用。
-5. **数据量太小**：默认 `episodes=1 × 200 steps`，单一天气窗口，无 train/val 划分 → 过拟合+高方差。
-6. **few-shot 来自 PPO（MLP）策略**，却宣称"自蒸馏避免 PPO→LLM 分布偏移" → 自相矛盾。
-7. **代码/文档/配置不一致**：README 称 6 阶段含 `distill`，代码仅 5 阶段且无 distill；
-   `run_progressive_training.py` 未接入；`config.json` 与 `PipelineConfig` 默认值/路径不一致。
+> The BEAR environment is fully deterministic (`reset()` always starts at
+> `epochs=0` with initial temperature = target, and weather is read from the EPW
+> file in order). Once policy stochasticity is fixed (PPO `deterministic=True`,
+> LLM `temperature=0`), every controller sees a byte-identical episode. This is
+> the basis for fixing #3 and the prerequisite for all other improvements.
 
 ---
 
-## 改进路线图
+## Detailed diagnosis
 
-| 优先级 | 改动 | 状态 |
+### 1. Reward signal confounded by environment difficulty (top root cause)
+
+BEAR's per-step reward (`BEAR/Customize/reward_functions.py`) is
+`-(action cost + error + temperature violation + CO2)`. At a given step its
+magnitude is dominated by **external conditions**, not by whether the action was
+good relative to alternatives. As a result:
+
+- `select_representative.py`: selecting "highest reward" picks **mild-weather
+  moments**, not exemplary control.
+- `prepare_distillation_data.py` / the in-finetuner quantile clip: keeping
+  "high-reward steps" likewise biases toward easy moments.
+- `7b_finetune_fixed.py` GAE advantage: mostly reflects the difficulty trajectory,
+  not action merit.
+
+**Fix:** use the *advantage relative to a baseline at the same state* to decouple
+action quality from environment difficulty. The most direct route is to reuse the
+trained PPO critic `V(s)` and compute `A = r + γ·V(s′) − V(s)`.
+
+### 2. The offline-PPO fine-tuner was unsound
+
+In `core_modules/7b_finetune_fixed.py`:
+
+- **GAE over filtered, shuffled data:** the dataset is first reward-quantile
+  clipped (breaking temporal adjacency) and then GAE is computed, so
+  `next_value = values[t+1]` is the value of an unrelated state → advantages are
+  noise.
+- **Randomly-initialized value head** (a single bf16 Linear) trained on ~100-200
+  samples → `V(s)` is noise → GAE is noise on top of noise.
+- **`old_lp` recomputed from the updated policy each epoch** → no stable reference
+  policy, the PPO ratio degenerates and clipping does nothing.
+- **Self-contradiction:** after filtering to "good" samples, advantages are
+  normalized to zero mean, so ~half of the curated good samples get negative
+  advantage and are pushed down — fighting the self-distillation intent.
+
+**Fix:** for "single-step reward + offline filtered data", use **filtered BC /
+advantage-weighted regression (AWR/RWR) / best-of-N rejection-sampling
+distillation**, not GAE-PPO over filtered, shuffled single-step data.
+
+### 3. No controlled evaluation
+
+`core_modules/draw_reward.py` only overlaid reward curves from PPO (collected
+during 500k training steps), the LLM rollout, and the fine-tuned rollout — all on
+different episodes/weather/seeds. It cannot support claims like "fine-tuned LLM >
+base LLM".
+
+**Fix:** evaluate every controller on the *same* fixed episodes and report episode
+return, comfort-violation rate, and energy. See `core_modules/evaluate.py`.
+
+### Other issues
+
+4. **The advertised self-distillation filtering was never wired in:**
+   `main_pipeline.py` fed the raw `llm_rollout.json` straight to fine-tuning;
+   `prepare_distillation_data.py` (the README's "Stage 4") was never called.
+5. **Too little data:** default `episodes=1 × 200 steps`, a single weather window,
+   no train/val split → overfitting and high variance.
+6. **Few-shot came from the PPO (MLP) policy**, contradicting the "self-
+   distillation avoids PPO→LLM distribution shift" claim.
+7. **Doc/code/config inconsistencies:** README claimed 6 stages incl. `distill`,
+   the code had 5 and no `distill`; `run_progressive_training.py` was orphaned;
+   nested `config.json` did not match the flat `PipelineConfig` defaults.
+
+---
+
+## Improvement roadmap
+
+| Priority | Change | Status |
 |---|---|---|
-| **P0** | 受控评估 harness（固定 episode 对比 PPO / 规则基线 / 基础LLM / 微调LLM）| ✅ `core_modules/evaluate.py` |
-| **P0** | critic-based advantage：用 PPO critic 给 LLM transition 算 advantage | ✅ `core_modules/compute_advantage.py` |
-| **P1** | 用 AWR（advantage 加权回归）替换 offline-PPO 微调 | ✅ `core_modules/awr_finetune.py` |
-| **P1** | distill 阶段改成 advantage-based 筛选并接入主流程 | ✅ `prepare_distillation_data.py` + `main_pipeline.py` |
-| **P1** | 扩大并多样化数据（多 episode / 多天气窗口）+ train/val 划分 | ⏳ 待做（评估已支持多 offset；rollout 多 episode 仍需扩量）|
-| **P2** | few-shot 改用 LLM 自身高 advantage 范例（真自蒸馏），按 advantage 排序 | ⏳ 待做 |
-| **P2** | 接通 pipeline、对齐 README/config | ✅ 7 阶段已接通；config/README 已对齐 |
+| **P0** | Controlled evaluation harness (fixed episodes; PPO / rule baseline / base LLM / fine-tuned LLM) | ✅ `core_modules/evaluate.py` |
+| **P0** | Critic-based advantage for LLM transitions | ✅ `core_modules/compute_advantage.py` |
+| **P1** | Replace offline-PPO fine-tuning with AWR (advantage-weighted regression) | ✅ `core_modules/awr_finetune.py` |
+| **P1** | Make `distill` advantage-based and wire it into the pipeline | ✅ `prepare_distillation_data.py` + `main_pipeline.py` |
+| **P1** | Multi-window rollout for diverse data | ✅ `rollout_fewshot_version.py` (`episode_offset_stride`) |
+| **P2** | Few-shot from the LLM's own high-advantage steps (true self-distillation) | ✅ `select_representative.py` + `fewshot_source='llm'` |
+| **P2** | Wire the full pipeline; align README/config | ✅ 7 stages wired; docs aligned |
 
-### 新版 pipeline（7 阶段）
+### Improved pipeline (7 stages)
 
 ```
-ppo → select → rollout → advantage → distill → finetune(AWR) → eval(受控)
+ppo → select → rollout → advantage → distill → finetune (AWR) → eval (controlled)
 ```
 
-- **advantage**：`compute_advantage.py`，用 PPO critic 给 rollout 算 TD advantage（解耦环境难度）。
-- **distill**：`prepare_distillation_data.py`，**优先按 advantage**（缺失才回退 reward）筛高质量子集。
-- **finetune**：默认 `awr_finetune.py`（AWR）；`use_awr=False` 可切回旧 `7b_finetune_fixed.py` 做对比。
-- **eval**：`evaluate.py`，固定 episode 受控对比 `zero/rule/ppo/llm/llm_ft`。
+- **advantage** — `compute_advantage.py`: TD advantage from the PPO critic
+  (decoupled from environment difficulty).
+- **distill** — `prepare_distillation_data.py`: ranks by **advantage** when
+  present (falls back to reward) and keeps the high-quality subset.
+- **finetune** — `awr_finetune.py` (AWR) by default; set `use_awr=False` to fall
+  back to the legacy `7b_finetune_fixed.py` for A/B comparison.
+- **eval** — `evaluate.py`: controlled comparison of `zero/rule/ppo/llm/llm_ft`
+  on identical episodes.
 
-> 仍待做（下一步）：(1) rollout 扩到多 episode/多天气窗口以增大蒸馏数据量并降过拟合；
-> (2) few-shot 从 LLM 自身高 advantage 步骤里选，做到端到端的真自蒸馏；
-> (3) 用评估 harness 跑 A/B：旧 offline-PPO vs 新 AWR，量化提升。
+### Still to do (next)
 
-### 度量指标（评估 harness 输出）
+1. Scale the rollout to more episodes / weather windows to grow the distillation
+   set and reduce overfitting.
+2. Run the A/B comparison (legacy offline-PPO vs AWR) through the evaluation
+   harness to quantify the gain.
+3. Optionally iterate the self-distillation loop (rebuild few-shot from the latest
+   high-advantage rollout, re-distill, re-finetune).
 
-- **episode 总回报**（越高越好，主指标）
-- **舒适度越界率**：room temp 落在 [18, 22]°C 之外的 (step, zone) 比例
-- **能耗代理**：平均 `||action||`（动作幅度）
-- **目标温差**：room temp 偏离 target 的平均绝对值
-- **解析失败率**（仅 LLM）
-
-> 关键纪律：**任何方法改动都必须先用评估 harness 在固定 episode 上量化，再下结论。**
+> Discipline: **every methodology change must be quantified on fixed episodes with
+> the evaluation harness before drawing conclusions.**
 </content>
-</invoke>

@@ -112,13 +112,13 @@ class RolloutConfig:
 
 def plot_rollout_results(trajectory: List[Dict], save_path: str):
     """
-    绘制 LLM Rollout 结果图表
+    Plot LLM rollout results.
 
-    生成的图表:
+    Generated charts:
     1. Step-by-step Reward
-    2. Reward 分布
-    3. 累积 Reward
-    4. 室内温度变化 (如果有)
+    2. Reward distribution
+    3. Cumulative reward
+    4. Indoor temperature change (if available)
     """
     try:
         if not trajectory:
@@ -128,14 +128,14 @@ def plot_rollout_results(trajectory: List[Dict], save_path: str):
         rewards = [d.get('reward', 0) for d in trajectory]
         steps = list(range(len(rewards)))
 
-        # 创建图表
+        # Create figure
         fig, axes = plt.subplots(2, 2, figsize=(14, 10))
         fig.suptitle('LLM Rollout Results', fontsize=14, fontweight='bold')
 
         # 1. Step Rewards
         ax1 = axes[0, 0]
         ax1.plot(steps, rewards, color='blue', linewidth=1, alpha=0.7)
-        # 滑动平均
+        # Moving average
         window = min(20, len(rewards) // 5) if len(rewards) > 5 else 1
         if window > 1:
             smoothed = np.convolve(rewards, np.ones(window)/window, mode='valid')
@@ -148,7 +148,7 @@ def plot_rollout_results(trajectory: List[Dict], save_path: str):
         ax1.grid(True, alpha=0.3)
         ax1.legend()
 
-        # 2. Reward 分布
+        # 2. Reward distribution
         ax2 = axes[0, 1]
         ax2.hist(rewards, bins=30, color='steelblue', edgecolor='white', alpha=0.7)
         ax2.axvline(np.mean(rewards), color='red', linestyle='--', linewidth=2, label=f'Mean: {np.mean(rewards):.2f}')
@@ -159,7 +159,7 @@ def plot_rollout_results(trajectory: List[Dict], save_path: str):
         ax2.legend()
         ax2.grid(True, alpha=0.3)
 
-        # 3. 累积 Reward
+        # 3. Cumulative reward
         ax3 = axes[1, 0]
         cumsum = np.cumsum(rewards)
         ax3.plot(steps, cumsum, color='green', linewidth=1.5)
@@ -169,7 +169,7 @@ def plot_rollout_results(trajectory: List[Dict], save_path: str):
         ax3.set_title(f'Cumulative Reward (Total: {cumsum[-1]:.2f})')
         ax3.grid(True, alpha=0.3)
 
-        # 4. 统计信息
+        # 4. Statistics
         ax4 = axes[1, 1]
         ax4.axis('off')
         stats_text = f"""
@@ -195,7 +195,7 @@ def plot_rollout_results(trajectory: List[Dict], save_path: str):
 
         plt.tight_layout()
 
-        # 保存
+        # Save
         plot_path = Path(save_path).parent / "rollout_results.png"
         plt.savefig(plot_path, dpi=150, bbox_inches='tight')
         plt.close()
