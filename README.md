@@ -14,25 +14,32 @@ quality from environmental difficulty.
 
 ## Pipeline
 
+Recommended path (best-of-N, environment as verifier):
+
 ```
-ppo → select → rollout → advantage → distill → finetune (AWR) → eval (controlled)
+ppo → select → bestofn → finetune (AWR) → eval (controlled)
 ```
 
 | Stage | Module | What it does |
 |-------|--------|--------------|
-| `ppo` | `ppo_collect.py` | Train a PPO baseline; its trajectory seeds few-shot examples and its **critic** is reused for advantages. |
+| `ppo` | `ppo_collect.py` | Train a PPO baseline (for comparison in `eval`; its trajectory also seeds few-shot examples). |
 | `select` | `select_representative.py` | Pick diverse, high-quality few-shot examples (ranked by advantage when available, else reward). |
-| `rollout` | `rollout_fewshot_version.py` | The base LLM controls the building and generates its own trajectories (optionally across multiple weather windows). |
-| `advantage` | `compute_advantage.py` | Use the PPO critic to add `A = r + γ·V(s′) − V(s)` per step, **decoupling action quality from environment difficulty**. |
-| `distill` | `prepare_distillation_data.py` | Keep the high-advantage subset of the LLM's own steps (true self-distillation data). |
-| `finetune` | `awr_finetune.py` | **Advantage-Weighted Regression**: weighted SFT with `w = clip(exp(A_norm/β))`. Replaces the unsound offline-PPO fine-tuner. |
+| `bestofn` | `best_of_n_collect.py` | The LLM proposes **N candidate actions per state**; each is scored by its **true reward in BEAR** (same-state comparison ⇒ no environment-difficulty confound, no PPO ceiling). The best action per state becomes training data with a clean same-state advantage. |
+| `finetune` | `awr_finetune.py` | **Advantage-Weighted Regression**: weighted SFT with `w = clip(exp(A_norm/β))` on the best-of-N data. Run `bestofn → finetune` repeatedly for expert iteration. |
 | `eval` | `evaluate.py` | Compare `zero / rule / ppo / llm / llm_ft` on **identical deterministic episodes** (return, comfort-violation rate, energy). |
 
-Why this works: BEAR's per-step reward is dominated by how hard the current
-weather/occupancy is, not by how good the action was. Ranking or weighting by
-raw reward therefore selects *easy moments*, not *good control*. Subtracting the
-critic baseline `V(s)` removes that confound, so the LLM is trained to imitate
-its genuinely better-than-baseline decisions.
+Why best-of-N: BEAR's per-step reward is dominated by how hard the current
+weather/occupancy is, not by how good the action was. Comparing N actions **at
+the same state** dissolves that confound completely (identical conditions, so
+reward differences come purely from the action) — no critic needed, and because
+the teacher is the real environment, the distilled policy can approach the task
+optimum rather than being capped at PPO.
+
+Legacy alternative (PPO-critic advantage) is still available as individual
+stages: `rollout → advantage → distill → finetune`. `advantage`
+(`compute_advantage.py`) adds `A = r + γ·V(s′) − V(s)` from the PPO critic, and
+`distill` (`prepare_distillation_data.py`) keeps the high-advantage subset. This
+path is simpler to run but is bounded by the PPO critic.
 
 ## Quick start
 
@@ -70,9 +77,10 @@ defaults). Key fields:
 |-------|---------|---------|
 | `building` / `weather` / `location` | `OfficeSmall` / `Hot_Dry` / `Tucson` | BEAR scenario |
 | `model_name` | `Qwen/Qwen2.5-7B-Instruct` | base LLM |
-| `gamma` | `0.99` | discount for the TD advantage |
+| `n_candidates` | `6` | best-of-N: actions sampled per state |
+| `bon_horizon` | `1` | best-of-N: counterfactual look-ahead length |
 | `awr_beta` | `1.0` | AWR temperature (higher = flatter weights) |
-| `adv_keep_percentile` | `0.5` | distillation keeps the better half by advantage |
+| `gamma` / `adv_keep_percentile` | `0.99` / `0.5` | legacy PPO-critic advantage path |
 | `fewshot_source` | `ppo` | `llm` rebuilds few-shot from the LLM's high-advantage steps |
 | `llm_rollout_offset_stride` | `0` | `>0` spreads episodes across weather windows |
 | `eval_controllers` / `eval_offsets` | see code | controllers and episodes for the eval stage |
@@ -93,13 +101,18 @@ METHODOLOGY_REVIEW.md  # Diagnosis of the old pipeline + improvement roadmap
 
 ## Status / roadmap
 
-Done: controlled evaluation, critic-based advantage, advantage-based
-self-distillation, AWR fine-tuning, multi-window rollout, advantage-ranked
-few-shot, end-to-end wiring.
+Done: controlled evaluation, best-of-N self-distillation (environment as
+verifier), AWR fine-tuning, multi-window rollout, advantage-ranked few-shot,
+end-to-end wiring. (A legacy PPO-critic advantage path is also available.)
 
-Next: scale the rollout to more episodes/weather windows for a larger
-distillation set; run the A/B (legacy offline-PPO vs AWR) through the evaluation
-harness to quantify the gain. See [`METHODOLOGY_REVIEW.md`](METHODOLOGY_REVIEW.md).
+Next, for a result worth having (see [`METHODOLOGY_REVIEW.md`](METHODOLOGY_REVIEW.md)):
+the LLM will not beat PPO/MPC at single-building optimal control. The defensible
+wins are where PPO structurally cannot compete:
+1. **Generalization** — self-distill on several buildings/climates, evaluate
+   zero-shot on held-out ones vs per-building-retrained PPO.
+2. **Language-conditioned control** — natural-language constraints in the prompt
+   ("prioritize comfort in room 2", "minimize energy after 6pm") with no retraining.
+3. **Self-improvement** — iterate `bestofn → finetune` and show `llm_ft ≫ llm`.
 
 ## References
 

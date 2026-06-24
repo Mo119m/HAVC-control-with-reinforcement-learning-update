@@ -48,6 +48,7 @@ class PipelineConfig:
     building: str = "OfficeSmall"
     weather: str = "Hot_Dry"
     location: str = "Tucson"
+    target: float = 22.0
     
     # Directories
     data_root: str = "./BEAR/Data/"
@@ -88,7 +89,12 @@ class PipelineConfig:
     finetune_batch_size: int = 1
     finetune_grad_accum: int = 8
 
-    # Advantage (critic-based) + AWR self-distillation
+    # Best-of-N self-distillation (environment as verifier) — recommended path
+    n_candidates: int = 6             # actions sampled per state
+    bon_horizon: int = 1             # counterfactual look-ahead length
+    bon_sample_temperature: float = 0.8
+
+    # Critic-based advantage (legacy alternative to best-of-N)
     gamma: float = 0.99               # discount for TD advantage
     awr_beta: float = 1.0             # AWR temperature
     adv_keep_percentile: float = 0.5  # distill: keep top half by advantage
@@ -116,6 +122,7 @@ class PipelineConfig:
             "llm_rollout_trajectory": base / self.llm_rollout_dir / "llm_rollout.json",
             "llm_rollout_adv": base / self.llm_rollout_dir / "llm_rollout_adv.json",
             "distillation_data": base / self.llm_rollout_dir / "distillation_data.json",
+            "best_of_n_data": base / self.llm_rollout_dir / "best_of_n_data.json",
 
             "finetune_model": base / self.finetune_dir / "final_model",
             "finetune_checkpoints": base / self.finetune_dir / "checkpoints",
@@ -226,7 +233,10 @@ class Pipeline:
         logger.info('='*60)
         
         if stage == "all":
-            stages = ["ppo", "select", "rollout", "advantage", "distill", "finetune", "eval"]
+            # Recommended path: best-of-N (environment as verifier) self-distillation.
+            # The legacy 'rollout → advantage → distill' chain is still available
+            # as individual stages.
+            stages = ["ppo", "select", "bestofn", "finetune", "eval"]
             for s in stages:
                 if not self.run_stage(s):
                     logger.error(f"Stage {s} failed, stopping pipeline")
@@ -237,6 +247,8 @@ class Pipeline:
             return self._run_ppo_training()
         elif stage == "select":
             return self._run_sample_selection()
+        elif stage == "bestofn":
+            return self._run_best_of_n()
         elif stage == "rollout":
             return self._run_llm_rollout()
         elif stage == "advantage":
@@ -478,6 +490,50 @@ class Pipeline:
             logger.error(f"LLM rollout failed: {e}")
             return False
     
+    def _run_best_of_n(self) -> bool:
+        """Best-of-N self-distillation (environment as verifier) — recommended.
+
+        The LLM proposes N candidate actions per state; each is scored by its true
+        reward in BEAR (same-state comparison, so no environment-difficulty
+        confound and no PPO ceiling). The best action per state becomes training
+        data with a clean same-state advantage.
+        """
+        logger.info("Collecting best-of-N self-distillation data...")
+
+        env = {
+            **os.environ,
+            "PYTHONUNBUFFERED": "1",
+        }
+        cmd = [
+            "python", "core_modules/best_of_n_collect.py",
+            "--building", self.config.building,
+            "--climate", self.config.weather,
+            "--location", self.config.location,
+            "--target", str(self.config.target),
+            "--max_steps", str(self.config.llm_rollout_max_steps),
+            "--episodes", str(self.config.llm_rollout_episodes),
+            "--episode_offset_stride", str(self.config.llm_rollout_offset_stride),
+            "--n_candidates", str(self.config.n_candidates),
+            "--horizon", str(self.config.bon_horizon),
+            "--sample_temperature", str(self.config.bon_sample_temperature),
+            "--model_name", self.config.model_name,
+            "--output", str(self.paths["best_of_n_data"]),
+        ]
+        if self.paths["fewshot_json"].exists():
+            cmd += ["--fewshot_json", str(self.paths["fewshot_json"])]
+
+        try:
+            subprocess.run(cmd, env=env, check=True, stdout=None, stderr=None)
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Best-of-N collection failed: {e}")
+            return False
+
+        if not self.paths["best_of_n_data"].exists():
+            logger.error("Best-of-N data not produced")
+            return False
+        logger.info("✅ Best-of-N self-distillation data collected")
+        return True
+
     def _run_advantage(self) -> bool:
         """Stage 3.5: Critic-based advantage computation.
 
@@ -561,15 +617,17 @@ class Pipeline:
 
         logger.info("Starting fine-tuning...")
 
-        # Choose training data: distilled (preferred) > advantage-augmented > raw
-        if self.paths["distillation_data"].exists():
+        # Choose training data: best-of-N (preferred) > distilled > advantage > raw
+        if self.paths["best_of_n_data"].exists():
+            train_data = self.paths["best_of_n_data"]
+        elif self.paths["distillation_data"].exists():
             train_data = self.paths["distillation_data"]
         elif self.paths["llm_rollout_adv"].exists():
             train_data = self.paths["llm_rollout_adv"]
         elif self.paths["llm_rollout_trajectory"].exists():
             train_data = self.paths["llm_rollout_trajectory"]
         else:
-            logger.error("No training data found, run 'rollout' stage first")
+            logger.error("No training data found, run 'bestofn' (or 'rollout') stage first")
             return False
         logger.info(f"Fine-tuning data: {train_data}")
 
@@ -584,9 +642,10 @@ class Pipeline:
         }
 
         env["AWR_BETA"] = str(self.config.awr_beta)
-        # Distill already filtered by advantage; let AWR weight without re-cutting
-        env["ADV_KEEP_PERCENTILE"] = "0.0" if train_data == self.paths["distillation_data"] \
-            else str(self.config.adv_keep_percentile)
+        # Best-of-N / distilled data is already the selected subset; keep all of it
+        # and let AWR weight by the (clean) advantage. Only re-cut for raw rollouts.
+        pre_selected = train_data in (self.paths["best_of_n_data"], self.paths["distillation_data"])
+        env["ADV_KEEP_PERCENTILE"] = "0.0" if pre_selected else str(self.config.adv_keep_percentile)
         logger.info(f"Using AWR fine-tuner (beta={self.config.awr_beta})")
 
         try:
@@ -681,7 +740,8 @@ def main():
         "--stage",
         type=str,
         default="all",
-        choices=["ppo", "select", "rollout", "advantage", "distill", "finetune", "eval", "all"],
+        choices=["ppo", "select", "bestofn", "rollout", "advantage", "distill",
+                 "finetune", "eval", "all"],
         help="Pipeline stage to run"
     )
     parser.add_argument(

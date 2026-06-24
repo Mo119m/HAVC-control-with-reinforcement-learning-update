@@ -156,7 +156,8 @@ def is_clean_entry(entry: Dict) -> bool:
     if entry.get("used_fallback", False):
         return False
     if entry.get("parsed_from", "") not in (
-        "json", "actions_line", "actions_line_no_brackets", "any_brackets", "last_json"
+        "json", "actions_line", "actions_line_no_brackets", "any_brackets", "last_json",
+        "best_of_n",  # entries chosen by the environment-as-verifier collector
     ):
         return False
     actions = entry.get("action_unit", [])

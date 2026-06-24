@@ -102,36 +102,58 @@ return, comfort-violation rate, and energy. See `core_modules/evaluate.py`.
 | Priority | Change | Status |
 |---|---|---|
 | **P0** | Controlled evaluation harness (fixed episodes; PPO / rule baseline / base LLM / fine-tuned LLM) | ✅ `core_modules/evaluate.py` |
-| **P0** | Critic-based advantage for LLM transitions | ✅ `core_modules/compute_advantage.py` |
+| **P0** | Critic-based advantage for LLM transitions (legacy alternative) | ✅ `core_modules/compute_advantage.py` |
+| **P0** | Best-of-N self-distillation with the environment as verifier (no critic, no PPO ceiling) | ✅ `core_modules/best_of_n_collect.py` |
 | **P1** | Replace offline-PPO fine-tuning with AWR (advantage-weighted regression) | ✅ `core_modules/awr_finetune.py` |
 | **P1** | Make `distill` advantage-based and wire it into the pipeline | ✅ `prepare_distillation_data.py` + `main_pipeline.py` |
 | **P1** | Multi-window rollout for diverse data | ✅ `rollout_fewshot_version.py` (`episode_offset_stride`) |
 | **P2** | Few-shot from the LLM's own high-advantage steps (true self-distillation) | ✅ `select_representative.py` + `fewshot_source='llm'` |
 | **P2** | Wire the full pipeline; align README/config | ✅ 7 stages wired; docs aligned |
 
-### Improved pipeline (7 stages)
+### Improved pipeline (recommended: best-of-N, environment as verifier)
 
 ```
-ppo → select → rollout → advantage → distill → finetune (AWR) → eval (controlled)
+ppo → select → bestofn → finetune (AWR) → eval (controlled)
 ```
 
-- **advantage** — `compute_advantage.py`: TD advantage from the PPO critic
-  (decoupled from environment difficulty).
-- **distill** — `prepare_distillation_data.py`: ranks by **advantage** when
-  present (falls back to reward) and keeps the high-quality subset.
-- **finetune** — `awr_finetune.py` (AWR). The original unsound offline-PPO
+- **bestofn** — `best_of_n_collect.py`: the LLM proposes N candidate actions per
+  state; each is scored by its **true reward in BEAR** (state snapshot → try
+  candidate → read reward → restore). Comparing candidates **at the same state**
+  removes the environment-difficulty confound *without a critic*, and because the
+  teacher is the real environment there is **no PPO ceiling**. The best action per
+  state becomes training data with a clean same-state advantage.
+- **finetune** — `awr_finetune.py` (AWR) on the best-of-N data. Iterate
+  `bestofn → finetune` for expert iteration. The original unsound offline-PPO
   fine-tuner has been removed.
 - **eval** — `evaluate.py`: controlled comparison of `zero/rule/ppo/llm/llm_ft`
   on identical episodes.
 
+A legacy PPO-critic path (`rollout → advantage → distill`, with
+`compute_advantage.py`) remains as individual stages, but it is bounded by the
+PPO critic and is not the recommended route.
+
+### The strategic point (what makes this produce a result)
+
+An LLM will **not** beat PPO/MPC at single-building optimal control — that is a
+solved control problem, and competing there yields a weak/negative result. The
+defensible contributions are where PPO structurally cannot compete:
+
+1. **Generalization** — self-distill on several buildings/climates and evaluate
+   **zero-shot on held-out** ones against per-building-retrained PPO. One
+   controller, no retraining: this is the headline result.
+2. **Language-conditioned control** — natural-language constraints/preferences in
+   the prompt, with no reward redesign or retraining.
+3. **Self-improvement** — iterate best-of-N expert iteration and show
+   `llm_ft ≫ llm`.
+
 ### Still to do (next)
 
-1. Scale the rollout to more episodes / weather windows to grow the distillation
-   set and reduce overfitting.
-2. Quantify the gain over the baselines (rule / PPO / base LLM) with the
-   evaluation harness.
-3. Optionally iterate the self-distillation loop (rebuild few-shot from the latest
-   high-advantage rollout, re-distill, re-finetune).
+1. Run the best-of-N expert-iteration loop on one building; confirm `llm_ft ≫ llm`
+   and that it approaches the optimum. Ablate: inference-time best-of-N (no
+   fine-tuning) vs fine-tuning — the cheaper option may suffice.
+2. Multi-building training + held-out zero-shot evaluation (the generalization
+   result).
+3. Add language-conditioned constraints to the prompt and measure adaptation.
 
 > Discipline: **every methodology change must be quantified on fixed episodes with
 > the evaluation harness before drawing conclusions.**
