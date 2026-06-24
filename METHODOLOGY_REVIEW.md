@@ -45,8 +45,8 @@ good relative to alternatives. As a result:
   moments**, not exemplary control.
 - `prepare_distillation_data.py` / the in-finetuner quantile clip: keeping
   "high-reward steps" likewise biases toward easy moments.
-- `7b_finetune_fixed.py` GAE advantage: mostly reflects the difficulty trajectory,
-  not action merit.
+- the offline-PPO fine-tuner's GAE advantage: mostly reflected the difficulty
+  trajectory, not action merit.
 
 **Fix:** use the *advantage relative to a baseline at the same state* to decouple
 action quality from environment difficulty. The most direct route is to reuse the
@@ -54,7 +54,7 @@ trained PPO critic `V(s)` and compute `A = r + γ·V(s′) − V(s)`.
 
 ### 2. The offline-PPO fine-tuner was unsound
 
-In `core_modules/7b_finetune_fixed.py`:
+In the original offline-PPO fine-tuner (since removed):
 
 - **GAE over filtered, shuffled data:** the dataset is first reward-quantile
   clipped (breaking temporal adjacency) and then GAE is computed, so
@@ -119,8 +119,8 @@ ppo → select → rollout → advantage → distill → finetune (AWR) → eval
   (decoupled from environment difficulty).
 - **distill** — `prepare_distillation_data.py`: ranks by **advantage** when
   present (falls back to reward) and keeps the high-quality subset.
-- **finetune** — `awr_finetune.py` (AWR) by default; set `use_awr=False` to fall
-  back to the legacy `7b_finetune_fixed.py` for A/B comparison.
+- **finetune** — `awr_finetune.py` (AWR). The original unsound offline-PPO
+  fine-tuner has been removed.
 - **eval** — `evaluate.py`: controlled comparison of `zero/rule/ppo/llm/llm_ft`
   on identical episodes.
 
@@ -128,8 +128,8 @@ ppo → select → rollout → advantage → distill → finetune (AWR) → eval
 
 1. Scale the rollout to more episodes / weather windows to grow the distillation
    set and reduce overfitting.
-2. Run the A/B comparison (legacy offline-PPO vs AWR) through the evaluation
-   harness to quantify the gain.
+2. Quantify the gain over the baselines (rule / PPO / base LLM) with the
+   evaluation harness.
 3. Optionally iterate the self-distillation loop (rebuild few-shot from the latest
    high-advantage rollout, re-distill, re-finetune).
 

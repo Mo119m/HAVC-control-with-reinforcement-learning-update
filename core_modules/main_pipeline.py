@@ -90,7 +90,6 @@ class PipelineConfig:
 
     # Advantage (critic-based) + AWR self-distillation
     gamma: float = 0.99               # discount for TD advantage
-    use_awr: bool = True              # AWR fine-tuner (True) vs legacy offline-PPO (False)
     awr_beta: float = 1.0             # AWR temperature
     adv_keep_percentile: float = 0.5  # distill: keep top half by advantage
 
@@ -584,21 +583,16 @@ class Pipeline:
             "LR": str(self.config.finetune_lr),
         }
 
-        if self.config.use_awr:
-            script = "core_modules/awr_finetune.py"
-            env["AWR_BETA"] = str(self.config.awr_beta)
-            # Distill already filtered by advantage; let AWR weight without re-cutting
-            env["ADV_KEEP_PERCENTILE"] = "0.0" if train_data == self.paths["distillation_data"] \
-                else str(self.config.adv_keep_percentile)
-            logger.info(f"Using AWR fine-tuner (beta={self.config.awr_beta})")
-        else:
-            script = "core_modules/7b_finetune_fixed.py"
-            logger.info("Using legacy offline-PPO fine-tuner")
+        env["AWR_BETA"] = str(self.config.awr_beta)
+        # Distill already filtered by advantage; let AWR weight without re-cutting
+        env["ADV_KEEP_PERCENTILE"] = "0.0" if train_data == self.paths["distillation_data"] \
+            else str(self.config.adv_keep_percentile)
+        logger.info(f"Using AWR fine-tuner (beta={self.config.awr_beta})")
 
         try:
             # Run with real-time output streaming (no timeout)
             result = subprocess.run(
-                ["python", script],
+                ["python", "core_modules/awr_finetune.py"],
                 env=env,
                 check=True,
                 stdout=None,

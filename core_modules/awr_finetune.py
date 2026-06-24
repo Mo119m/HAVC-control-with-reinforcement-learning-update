@@ -2,7 +2,7 @@
 Advantage-Weighted Regression (AWR) Fine-tuning
 ===============================================
 
-Replacement for the unsound offline-"PPO" fine-tuner (``7b_finetune_fixed.py``).
+Replacement for the original unsound offline-"PPO" fine-tuner (since removed).
 
 What was wrong before (see METHODOLOGY_REVIEW.md, root cause #2)
 ---------------------------------------------------------------

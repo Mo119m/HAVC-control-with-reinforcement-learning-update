@@ -71,7 +71,6 @@ defaults). Key fields:
 | `building` / `weather` / `location` | `OfficeSmall` / `Hot_Dry` / `Tucson` | BEAR scenario |
 | `model_name` | `Qwen/Qwen2.5-7B-Instruct` | base LLM |
 | `gamma` | `0.99` | discount for the TD advantage |
-| `use_awr` | `True` | AWR fine-tuner (`False` = legacy offline-PPO, kept for A/B) |
 | `awr_beta` | `1.0` | AWR temperature (higher = flatter weights) |
 | `adv_keep_percentile` | `0.5` | distillation keeps the better half by advantage |
 | `fewshot_source` | `ppo` | `llm` rebuilds few-shot from the LLM's high-advantage steps |
