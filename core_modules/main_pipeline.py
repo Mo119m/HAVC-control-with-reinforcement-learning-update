@@ -68,6 +68,10 @@ class PipelineConfig:
     clusters: int = 12
     n_per_cluster: int = 20
     min_reward_percentile: float = 0.5
+    # "ppo": few-shot from the PPO trajectory (bootstrap).
+    # "llm": few-shot from the LLM's own high-advantage steps (true self-
+    #        distillation) — requires the 'advantage' stage to have run first.
+    fewshot_source: str = "ppo"
     
     # LLM Inference
     model_name: str = "Qwen/Qwen2.5-7B-Instruct"
@@ -76,6 +80,7 @@ class PipelineConfig:
     fewshot_alpha: float = 0.6
     llm_rollout_episodes: int = 1  # Number of episodes to run
     llm_rollout_max_steps: int = 200  # Steps per episode
+    llm_rollout_offset_stride: int = 0  # >0: each episode uses a different weather window
     
     # Fine-tuning
     finetune_epochs: int = 4
@@ -318,13 +323,24 @@ class Pipeline:
 
         logger.info("Starting sample selection...")
 
-        if not self.paths["ppo_trajectory"].exists():
-            logger.error("PPO trajectory not found, run 'ppo' stage first")
+        # Choose the few-shot source. "llm" uses the LLM's own advantage-ranked
+        # steps (true self-distillation); requires a prior advantage stage.
+        if self.config.fewshot_source == "llm" and self.paths["llm_rollout_adv"].exists():
+            traj_source = self.paths["llm_rollout_adv"]
+            logger.info("Few-shot source: LLM high-advantage rollout (self-distillation)")
+        else:
+            if self.config.fewshot_source == "llm":
+                logger.warning("fewshot_source='llm' but advantage rollout missing; "
+                               "falling back to PPO trajectory")
+            traj_source = self.paths["ppo_trajectory"]
+
+        if not traj_source.exists():
+            logger.error(f"Few-shot source not found: {traj_source} (run 'ppo'/'advantage' first)")
             return False
-        
+
         cmd = [
             "python", "core_modules/select_representative.py",
-            "--traj", str(self.paths["ppo_trajectory"]),
+            "--traj", str(traj_source),
             "--out_dir", str(Path(self.config.base_dir) / self.config.samples_dir),
             "--preselect", str(self.config.preselect),
             "--clusters", str(self.config.clusters),
@@ -411,6 +427,7 @@ class Pipeline:
             "SAVE_PATH": str(self.paths["llm_rollout_trajectory"]),
             "MAX_STEPS": str(self.config.llm_rollout_max_steps),
             "NUM_EPISODES": str(self.config.llm_rollout_episodes),
+            "EPISODE_OFFSET_STRIDE": str(self.config.llm_rollout_offset_stride),
             "K_FEWSHOT": str(self.config.k_fewshot),
             "FEWSHOT_ALPHA": str(self.config.fewshot_alpha),
             "MODEL_NAME": self.config.model_name,

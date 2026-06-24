@@ -62,6 +62,7 @@ class RolloutConfig:
     # Rollout
     max_steps: int = 200
     num_episodes: int = 1  # Number of episodes to run
+    episode_offset_stride: int = 0  # >0: episode i starts at weather window i*stride
     hist_keep: int = 6
     hist_lines_in_prompt: int = 3
 
@@ -95,6 +96,8 @@ class RolloutConfig:
             self.max_steps = int(os.getenv("MAX_STEPS"))
         if os.getenv("NUM_EPISODES"):
             self.num_episodes = int(os.getenv("NUM_EPISODES"))
+        if os.getenv("EPISODE_OFFSET_STRIDE"):
+            self.episode_offset_stride = int(os.getenv("EPISODE_OFFSET_STRIDE"))
         if os.getenv("FEWSHOT_JSON"):
             self.fewshot_json = os.getenv("FEWSHOT_JSON")
         if os.getenv("K_FEWSHOT"):
@@ -328,12 +331,33 @@ def run_single_episode(config: RolloutConfig, episode_num: int = 0) -> List[Dict
     
     vec_env = make_vec_env(lambda: BuildingEnvReal(param), n_envs=1)
     env = vec_env.envs[0]
-    
+
     logger.info(f"Environment action space: {env.action_space.low} to {env.action_space.high}")
-    
+
     # Reset environment
     reset_ret = env.reset()
     obs = reset_ret[0] if isinstance(reset_ret, tuple) else reset_ret
+
+    # Multi-window diversity: start each episode at a different weather window so
+    # the rollout (and the distilled training data) covers varied conditions
+    # rather than the single deterministic window epochs=0.
+    offset = (episode_num * config.episode_offset_stride) % (env.length_of_weather - 1) \
+        if config.episode_offset_stride > 0 else 0
+    if offset > 0:
+        env.epochs = offset
+        T_initial = env.X_new
+        ghi_repeated = np.full(T_initial.shape, env.ghi[env.epochs])
+        occ_repeated = np.full(T_initial.shape, env.Occupower / 1000)
+        env.state = np.concatenate((
+            T_initial,
+            env.OutTemp[env.epochs].reshape(-1),
+            ghi_repeated,
+            env.GroundTemp[env.epochs].reshape(-1),
+            occ_repeated,
+        ), axis=0)
+        obs = env.state
+        logger.info(f"[Episode {episode_num+1}] weather window offset: {offset}")
+
     obs = np.array(obs).flatten().tolist()
     
     # Initialize history and logs

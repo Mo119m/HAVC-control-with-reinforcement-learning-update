@@ -176,14 +176,24 @@ def load_and_filter_trajectory(
 
     logger.info(f"Loaded {len(trajectory)} transitions")
 
-    # First pass: Extract all valid candidates (without reward filtering)
+    # Prefer the critic 'advantage' signal (decoupled from environment difficulty)
+    # over raw reward. When sourced from the LLM rollout this gives true
+    # self-distillation few-shot examples; PPO trajectories fall back to reward.
+    signal_key = "advantage" if trajectory and all(
+        ("advantage" in s and s["advantage"] is not None) for s in trajectory
+    ) else "reward"
+    logger.info(f"Ranking few-shot candidates by '{signal_key}'")
+
+    # First pass: Extract all valid candidates (without signal filtering)
     all_candidates = []
 
     for i, step in enumerate(trajectory):
-        # Extract fields
+        # Extract fields (PPO trajectories use 'action'; LLM rollouts use 'action_unit')
         obs = step.get("obs") or step.get("obs_before")
         action = step.get("action")
-        reward = step.get("reward", 0.0)
+        if action is None:
+            action = step.get("action_unit")
+        reward = step.get(signal_key, 0.0)
 
         if obs is None or action is None:
             continue
