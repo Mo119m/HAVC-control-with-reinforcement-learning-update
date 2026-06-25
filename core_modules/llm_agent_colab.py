@@ -190,9 +190,10 @@ def call_llm(
             add_generation_prompt=True,
             return_tensors="pt"
         )
-        # Newer transformers return a BatchEncoding (dict); older ones a bare
-        # tensor. Normalize to the input_ids tensor so .shape / slicing work.
-        if isinstance(inputs, dict):
+        # Newer transformers return a BatchEncoding (a UserDict, NOT a dict
+        # subclass) instead of a bare tensor. Normalize to the input_ids tensor
+        # so .shape / slicing work.
+        if not isinstance(inputs, torch.Tensor):
             inputs = inputs["input_ids"]
         
         logger.debug(f"Input tokens: {inputs.shape[1]}")

@@ -179,8 +179,10 @@ def sample_candidate_actions(prompt: str, n: int, n_actions: int, cfg: BestOfNCo
         [{"role": "user", "content": prompt.strip()}],
         add_generation_prompt=True, return_tensors="pt",
     )
-    # Newer transformers return a BatchEncoding (dict); older ones a bare tensor.
-    input_ids = (enc["input_ids"] if isinstance(enc, dict) else enc).to(device)
+    # Newer transformers return a BatchEncoding (a UserDict, NOT a dict subclass)
+    # instead of a bare tensor. Normalize to the input_ids tensor.
+    input_ids = enc if isinstance(enc, torch.Tensor) else enc["input_ids"]
+    input_ids = input_ids.to(device)
     prompt_len = input_ids.shape[1]
 
     gen_kwargs = dict(
