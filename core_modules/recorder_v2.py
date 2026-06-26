@@ -13,6 +13,7 @@ Key Features:
 
 import os
 import json
+import random
 import logging
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -38,22 +39,29 @@ class TrajectoryRecorder(BaseCallback):
         self,
         save_path: str = "ppo_trajectory.json",
         verbose: int = 1,
-        auto_save_interval: Optional[int] = None
+        auto_save_interval: Optional[int] = None,
+        max_records: int = 20000,
     ):
         """
         Initialize trajectory recorder.
-        
+
         Args:
             save_path: Path to save JSON file
             verbose: Verbosity level (0=silent, 1=info, 2=debug)
             auto_save_interval: Auto-save every N steps (None to disable)
+            max_records: Hard cap on transitions kept in memory. Beyond this,
+                reservoir sampling keeps a uniform random sample spread across the
+                whole run, so RAM stays bounded no matter how long training is
+                (a few thousand samples is plenty for few-shot selection).
         """
         super().__init__(verbose)
         self.save_path = save_path
         self.buffer: List[Dict[str, Any]] = []
         self.prev_obs: Optional[Any] = None
         self.auto_save_interval = auto_save_interval
+        self.max_records = int(os.getenv("RECORDER_MAX_RECORDS", str(max_records)))
         self.step_count = 0
+        self._rng = random.Random(0)
         
         # Ensure save directory exists
         save_dir = os.path.dirname(save_path)
@@ -248,11 +256,18 @@ class TrajectoryRecorder(BaseCallback):
                 "terminal_obs": terminal_obs
             }
             
-            self.buffer.append(transition)
+            # Reservoir sampling: keep a uniform random sample of size
+            # max_records over the whole stream, so memory is bounded.
             self.step_count += 1
-            
-            # Auto-save if enabled
-            if (self.auto_save_interval is not None and 
+            if len(self.buffer) < self.max_records:
+                self.buffer.append(transition)
+            else:
+                j = self._rng.randint(0, self.step_count - 1)
+                if j < self.max_records:
+                    self.buffer[j] = transition
+
+            # Auto-save if enabled (buffer is bounded, so this stays cheap)
+            if (self.auto_save_interval is not None and
                 self.step_count % self.auto_save_interval == 0):
                 self._save_buffer(incremental=True)
             
