@@ -329,9 +329,9 @@ def train(config: AWRConfig):
         tokenizer.pad_token_id = tokenizer.eos_token_id
     tokenizer.padding_side = "right"
 
-    # 4-bit (QLoRA) by default on CUDA so a 7B fits a 16 GB T4. Falls back to
-    # bf16 if bitsandbytes is unavailable. Disable with LOAD_IN_4BIT=0.
-    load_4bit = os.getenv("LOAD_IN_4BIT", "1") == "1" and torch.cuda.is_available()
+    # Full bf16 LoRA by default (no quality loss). 4-bit QLoRA is an opt-in
+    # fallback for small GPUs (T4): set LOAD_IN_4BIT=1.
+    load_4bit = os.getenv("LOAD_IN_4BIT", "0") == "1" and torch.cuda.is_available()
     quant_config = None
     if load_4bit:
         try:

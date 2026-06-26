@@ -185,9 +185,10 @@ def sample_candidate_actions(prompt: str, n: int, n_actions: int, cfg: BestOfNCo
     input_ids = input_ids.to(device)
     prompt_len = input_ids.shape[1]
 
-    # Generate in small sub-batches to bound activation memory (a T4 OOMs if all
-    # N sequences are decoded in parallel). Tune with BON_MAX_PARALLEL.
-    max_parallel = int(os.getenv("BON_MAX_PARALLEL", "2"))
+    # Decode candidates in sub-batches. Default is large enough to do all N at
+    # once on a big GPU (A100); lower BON_MAX_PARALLEL on a small GPU to bound
+    # activation memory.
+    max_parallel = int(os.getenv("BON_MAX_PARALLEL", "8"))
     out_seqs = []
     remaining = n
     with torch.no_grad():

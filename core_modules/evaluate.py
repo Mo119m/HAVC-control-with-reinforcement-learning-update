@@ -288,9 +288,10 @@ class LLMController(Controller):
         device_map = "auto" if torch.cuda.is_available() else {"": "cpu"}
         dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
 
-        # 4-bit by default on CUDA so a 7B fits a 16 GB T4. Disable with LOAD_IN_4BIT=0.
+        # Full bf16 by default. 4-bit is an opt-in fallback for small GPUs (T4):
+        # set LOAD_IN_4BIT=1.
         quant_config = None
-        if torch.cuda.is_available() and os.getenv("LOAD_IN_4BIT", "1") == "1":
+        if torch.cuda.is_available() and os.getenv("LOAD_IN_4BIT", "0") == "1":
             try:
                 from transformers import BitsAndBytesConfig
                 quant_config = BitsAndBytesConfig(

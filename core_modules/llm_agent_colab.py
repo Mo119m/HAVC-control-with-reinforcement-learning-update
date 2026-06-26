@@ -113,11 +113,10 @@ def load_llm(
         # Load model with optimal settings
         device_map, torch_dtype = _select_device_and_dtype()
 
-        # 4-bit by default on CUDA so a 7B fits a 16 GB T4 with headroom for
-        # generation. Falls back to plain dtype if bitsandbytes is unavailable.
-        # Disable with LOAD_IN_4BIT=0.
+        # Full bf16 by default (no quality loss). 4-bit is an OPT-IN fallback for
+        # small GPUs (e.g. a 16 GB T4): set LOAD_IN_4BIT=1 to fit a 7B there.
         quant_config = None
-        if torch.cuda.is_available() and os.getenv("LOAD_IN_4BIT", "1") == "1":
+        if torch.cuda.is_available() and os.getenv("LOAD_IN_4BIT", "0") == "1":
             try:
                 from transformers import BitsAndBytesConfig
                 quant_config = BitsAndBytesConfig(
