@@ -329,15 +329,34 @@ def train(config: AWRConfig):
         tokenizer.pad_token_id = tokenizer.eos_token_id
     tokenizer.padding_side = "right"
 
+    # 4-bit (QLoRA) by default on CUDA so a 7B fits a 16 GB T4. Falls back to
+    # bf16 if bitsandbytes is unavailable. Disable with LOAD_IN_4BIT=0.
+    load_4bit = os.getenv("LOAD_IN_4BIT", "1") == "1" and torch.cuda.is_available()
+    quant_config = None
+    if load_4bit:
+        try:
+            from transformers import BitsAndBytesConfig
+            quant_config = BitsAndBytesConfig(
+                load_in_4bit=True, bnb_4bit_quant_type="nf4",
+                bnb_4bit_compute_dtype=torch.bfloat16, bnb_4bit_use_double_quant=True,
+            )
+            logger.info("Loading base model in 4-bit (QLoRA)")
+        except Exception as e:
+            logger.warning(f"4-bit unavailable ({e}); loading in bf16")
+            quant_config = None
+
     model = AutoModelForCausalLM.from_pretrained(
         config.base_model, trust_remote_code=True,
         torch_dtype=torch.bfloat16, device_map="auto",
+        quantization_config=quant_config,
     )
     model.config.use_cache = False
     model.gradient_checkpointing_enable()
 
     try:
-        from peft import LoraConfig, get_peft_model
+        from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+        if quant_config is not None:
+            model = prepare_model_for_kbit_training(model)
         model = get_peft_model(model, LoraConfig(
             task_type="CAUSAL_LM", inference_mode=False,
             r=config.lora_r, lora_alpha=config.lora_alpha,

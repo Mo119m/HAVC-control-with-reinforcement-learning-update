@@ -20,6 +20,7 @@ setup(
         "transformers>=4.35.0",
         "accelerate>=0.24.0",
         "peft>=0.6.0",
+        "bitsandbytes>=0.43.0",
         "stable-baselines3>=2.0.0",
         "sb3-contrib>=2.0.0",
         "gymnasium>=0.29.0",

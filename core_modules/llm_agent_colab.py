@@ -112,12 +112,29 @@ def load_llm(
         
         # Load model with optimal settings
         device_map, torch_dtype = _select_device_and_dtype()
+
+        # 4-bit by default on CUDA so a 7B fits a 16 GB T4 with headroom for
+        # generation. Falls back to plain dtype if bitsandbytes is unavailable.
+        # Disable with LOAD_IN_4BIT=0.
+        quant_config = None
+        if torch.cuda.is_available() and os.getenv("LOAD_IN_4BIT", "1") == "1":
+            try:
+                from transformers import BitsAndBytesConfig
+                quant_config = BitsAndBytesConfig(
+                    load_in_4bit=True, bnb_4bit_quant_type="nf4",
+                    bnb_4bit_compute_dtype=torch.bfloat16, bnb_4bit_use_double_quant=True,
+                )
+                logger.info("Loading LLM in 4-bit")
+            except Exception as e:
+                logger.warning(f"4-bit unavailable ({e}); loading in {torch_dtype}")
+
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
             trust_remote_code=True,
             token=hf_token,
             device_map=device_map,
-            torch_dtype=torch_dtype
+            torch_dtype=torch_dtype,
+            quantization_config=quant_config,
         ).eval()
         
         logger.info("Model loaded successfully")

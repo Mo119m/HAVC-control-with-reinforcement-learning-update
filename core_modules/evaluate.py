@@ -287,9 +287,23 @@ class LLMController(Controller):
 
         device_map = "auto" if torch.cuda.is_available() else {"": "cpu"}
         dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
+
+        # 4-bit by default on CUDA so a 7B fits a 16 GB T4. Disable with LOAD_IN_4BIT=0.
+        quant_config = None
+        if torch.cuda.is_available() and os.getenv("LOAD_IN_4BIT", "1") == "1":
+            try:
+                from transformers import BitsAndBytesConfig
+                quant_config = BitsAndBytesConfig(
+                    load_in_4bit=True, bnb_4bit_quant_type="nf4",
+                    bnb_4bit_compute_dtype=torch.bfloat16, bnb_4bit_use_double_quant=True,
+                )
+            except Exception as e:
+                logger.warning(f"4-bit unavailable ({e}); loading in {dtype}")
+
         model = AutoModelForCausalLM.from_pretrained(
             self.cfg.model_name, trust_remote_code=True,
             device_map=device_map, torch_dtype=dtype,
+            quantization_config=quant_config,
         )
 
         if self.adapter_path:

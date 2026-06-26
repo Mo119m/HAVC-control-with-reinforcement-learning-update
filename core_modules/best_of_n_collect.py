@@ -185,17 +185,26 @@ def sample_candidate_actions(prompt: str, n: int, n_actions: int, cfg: BestOfNCo
     input_ids = input_ids.to(device)
     prompt_len = input_ids.shape[1]
 
-    gen_kwargs = dict(
-        max_new_tokens=cfg.max_new_tokens,
-        do_sample=True, temperature=max(cfg.sample_temperature, 1e-3),
-        top_p=0.9, top_k=50, num_return_sequences=n,
-        pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
-    )
+    # Generate in small sub-batches to bound activation memory (a T4 OOMs if all
+    # N sequences are decoded in parallel). Tune with BON_MAX_PARALLEL.
+    max_parallel = int(os.getenv("BON_MAX_PARALLEL", "2"))
+    out_seqs = []
+    remaining = n
     with torch.no_grad():
-        out = model.generate(input_ids, **gen_kwargs)
+        while remaining > 0:
+            k = min(max_parallel, remaining)
+            gen_kwargs = dict(
+                max_new_tokens=cfg.max_new_tokens,
+                do_sample=True, temperature=max(cfg.sample_temperature, 1e-3),
+                top_p=0.9, top_k=50, num_return_sequences=k,
+                pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
+            )
+            out = model.generate(input_ids, **gen_kwargs)
+            out_seqs.extend(list(out))
+            remaining -= k
 
     actions = []
-    for seq in out:
+    for seq in out_seqs:
         text = tokenizer.decode(seq[prompt_len:], skip_special_tokens=True)
         a, _ = parse_actions_with_validation(text, n_actions)
         if a is not None:
