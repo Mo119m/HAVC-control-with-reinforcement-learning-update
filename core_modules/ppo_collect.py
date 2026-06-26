@@ -341,7 +341,7 @@ class CollectionConfig:
     data_root: str = ""  # Will be set in __post_init__
 
     # Training
-    total_steps: int = 500000
+    total_steps: int = 100000
     n_envs: int = 1
     seed: int = 42
 
@@ -525,7 +525,7 @@ def main():
         building=os.getenv("BUILDING", "OfficeSmall"),
         weather=os.getenv("WEATHER", "Hot_Dry"),
         location=os.getenv("LOCATION", "Tucson"),
-        total_steps=int(os.getenv("TOTAL_STEPS", "500000")),
+        total_steps=int(os.getenv("TOTAL_STEPS", "100000")),
         save_dir=os.getenv("SAVE_DIR", "./runs_officesmall_hotdry"),
     )
     

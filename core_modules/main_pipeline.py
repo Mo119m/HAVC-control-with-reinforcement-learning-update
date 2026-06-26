@@ -60,8 +60,10 @@ class PipelineConfig:
     eval_dir: str = "05_evaluation"
     reports_dir: str = "reports"
     
-    # PPO Training
-    ppo_total_steps: int = 500000
+    # PPO Training. PPO is only a baseline + few-shot source in the best-of-N
+    # path (its critic is no longer used), so a smaller budget is plenty and runs
+    # in a few minutes instead of ~20 (avoiding Colab idle disconnects).
+    ppo_total_steps: int = 100000
     ppo_checkpoint_freq: int = 50000
     
     # Sample Selection
