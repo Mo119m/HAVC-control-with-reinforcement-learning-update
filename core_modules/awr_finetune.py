@@ -207,16 +207,31 @@ def load_awr_samples(paths: List[str], allow_reward_fallback: bool) -> List[Dict
 # ---------------------------------------------------------------------------
 # Tokenization (self-contained; mirrors the chat-template masking used before)
 # ---------------------------------------------------------------------------
+def _to_id_list(x) -> List[int]:
+    """Normalize apply_chat_template output to a flat list of token ids.
+
+    Newer transformers may return a BatchEncoding (UserDict) or a tensor even
+    with tokenize=True; older ones return a plain list.
+    """
+    if hasattr(x, "input_ids"):          # BatchEncoding
+        x = x["input_ids"]
+    if hasattr(x, "tolist"):             # tensor / ndarray
+        x = x.tolist()
+    if x and isinstance(x[0], list):     # batched -> take first row
+        x = x[0]
+    return list(x)
+
+
 def encode_sample(sample: Dict, tokenizer) -> Tuple[List[int], List[int]]:
     """Return (input_ids, labels) with the prompt masked (-100) and answer kept."""
     messages_full = [
         {"role": "user", "content": sample["prompt"]},
         {"role": "assistant", "content": sample["answer"]},
     ]
-    ids_full = tokenizer.apply_chat_template(messages_full, add_generation_prompt=False, tokenize=True)
-    ids_prompt = tokenizer.apply_chat_template(
-        [{"role": "user", "content": sample["prompt"]}], add_generation_prompt=True, tokenize=True
-    )
+    ids_full = _to_id_list(tokenizer.apply_chat_template(
+        messages_full, add_generation_prompt=False, tokenize=True))
+    ids_prompt = _to_id_list(tokenizer.apply_chat_template(
+        [{"role": "user", "content": sample["prompt"]}], add_generation_prompt=True, tokenize=True))
     labels = list(ids_full)
     for i in range(min(len(ids_prompt), len(labels))):
         labels[i] = -100
